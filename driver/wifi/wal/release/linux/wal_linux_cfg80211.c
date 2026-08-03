@@ -1475,7 +1475,7 @@ OAL_STATIC osal_s32 uapi_cfg80211_disconnect(oal_wiphy_stru *wiphy, oal_net_devi
 *****************************************************************************/
 OAL_STATIC osal_s32 uapi_cfg80211_add_key(oal_wiphy_stru *wiphy,
     oal_net_device_stru *netdev,
-#ifdef CONTROLLER_CUSTOMIZATION
+#if defined(CONTROLLER_CUSTOMIZATION) || (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0))
     osal_s32 link_id,
 #endif
     osal_u8 key_index,
@@ -1575,7 +1575,7 @@ OAL_STATIC osal_s32 uapi_cfg80211_add_key(oal_wiphy_stru *wiphy,
 *****************************************************************************/
 OAL_STATIC osal_s32 uapi_cfg80211_get_key(oal_wiphy_stru *wiphy,
     oal_net_device_stru *netdev,
-#ifdef CONTROLLER_CUSTOMIZATION
+#if defined(CONTROLLER_CUSTOMIZATION) || (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0))
     osal_s32 link_id,
 #endif
     osal_u8 key_index,
@@ -1669,7 +1669,7 @@ OAL_STATIC osal_s32 uapi_cfg80211_get_key(oal_wiphy_stru *wiphy,
 *****************************************************************************/
 OAL_STATIC osal_s32 uapi_cfg80211_remove_key(oal_wiphy_stru *wiphy,
     oal_net_device_stru *netdev,
-#ifdef CONTROLLER_CUSTOMIZATION
+#if defined(CONTROLLER_CUSTOMIZATION) || (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0))
     osal_s32 link_id,
 #endif
     osal_u8 key_index,
@@ -1753,7 +1753,7 @@ OAL_STATIC osal_s32 uapi_cfg80211_remove_key(oal_wiphy_stru *wiphy,
 
 *****************************************************************************/
 OAL_STATIC osal_s32 uapi_cfg80211_set_default_key(oal_wiphy_stru *wiphy, oal_net_device_stru *netdev,
-#ifdef CONTROLLER_CUSTOMIZATION
+#if defined(CONTROLLER_CUSTOMIZATION) || (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0))
     osal_s32 link_id,
 #endif
     osal_u8 key_index,
@@ -1784,7 +1784,7 @@ OAL_STATIC osal_s32 uapi_cfg80211_set_default_key(oal_wiphy_stru *wiphy, oal_net
 
 *****************************************************************************/
 osal_s32 uapi_cfg80211_set_default_mgmt_key_etc(oal_wiphy_stru *wiphy, oal_net_device_stru *netdev,
-#ifdef CONTROLLER_CUSTOMIZATION
+#if defined(CONTROLLER_CUSTOMIZATION) || (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0))
     osal_s32 link_id,
 #endif
     osal_u8 key_index)
@@ -1902,7 +1902,11 @@ OAL_STATIC osal_s32 uapi_cfg80211_set_channel(oal_wiphy_stru *wiphy, oal_net_dev
 
 *****************************************************************************/
 #if defined(LINUX_VERSION_CODE) && (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,34))
-OAL_STATIC osal_s32 uapi_cfg80211_set_wiphy_params(oal_wiphy_stru *wiphy, osal_u32 changed)
+OAL_STATIC osal_s32 uapi_cfg80211_set_wiphy_params(oal_wiphy_stru *wiphy,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+    osal_s32 radio_idx,
+#endif
+    osal_u32 changed)
 {
     /* 通过HOSTAPD 设置RTS 门限，分片门限 uapi_witp_set_frag uapi_witp_set_rts */
     oam_warning_log0(0, OAM_SF_CFG,
@@ -2437,10 +2441,17 @@ OAL_STATIC osal_s32 wal_cfg80211_fill_beacon_param(oal_net_device_stru *netdev,
 
 *****************************************************************************/
 OAL_STATIC osal_s32 uapi_cfg80211_change_beacon(oal_wiphy_stru *wiphy, oal_net_device_stru *netdev,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+    struct cfg80211_ap_update *beacon_update)
+#else
     oal_beacon_data_stru *beacon_info)
+#endif
 {
     mac_beacon_param_stru        beacon_param;  /* beacon info struct */
     osal_s32                    l_ret;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+    oal_beacon_data_stru *beacon_info = beacon_update == OAL_PTR_NULL ? OAL_PTR_NULL : &beacon_update->beacon;
+#endif
 
     wal_record_wifi_external_log(WLAN_WIFI_CFG80211_OPS, __func__);
     oam_info_log0(0, OAM_SF_ANY, "{uapi_cfg80211_change_beacon::enter here.}");
@@ -2582,7 +2593,7 @@ OAL_STATIC osal_s32 wal_cfg80211_set_channel_info(oal_wiphy_stru *wiphy, oal_net
     /* 获取vap id */
     hmac_vap = (hmac_vap_stru *)netdev->ml_priv;
     vap_id   = hmac_vap->vap_id;
-#ifdef CONTROLLER_CUSTOMIZATION
+#if defined(CONTROLLER_CUSTOMIZATION) || (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0))
     chan_def = &(netdev->ieee80211_ptr->u.ap.preset_chandef);
 #else
     chan_def = &(netdev->ieee80211_ptr->preset_chandef);
@@ -2845,7 +2856,7 @@ return_handle:
 
 *****************************************************************************/
 OAL_STATIC osal_s32 uapi_cfg80211_stop_ap(oal_wiphy_stru *wiphy, oal_net_device_stru *netdev
-#ifdef CONTROLLER_CUSTOMIZATION
+#if defined(CONTROLLER_CUSTOMIZATION) || (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0))
     , osal_u32 link_id
 #endif
 )
@@ -5407,7 +5418,7 @@ osal_void uapi_cfg80211_mgmt_frame_register_etc(struct wiphy *wiphy, struct wire
 }
 
 osal_s32 uapi_cfg80211_set_bitrate_mask_etc(struct wiphy *wiphy, struct net_device *dev,
-#ifdef CONTROLLER_CUSTOMIZATION
+#if defined(CONTROLLER_CUSTOMIZATION) || (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0))
     osal_u32 link_id,
 #endif
     const u8 *peer,
@@ -6526,4 +6537,3 @@ osal_s32 wal_report_csi_msg(hmac_vap_stru *hmac_vap, frw_msg *msg)
 }
 #endif
 #endif
-

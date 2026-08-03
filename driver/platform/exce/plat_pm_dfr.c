@@ -568,7 +568,7 @@ os_kernel_file_stru *open_file_to_readm_etc(osal_u8 *name, osal_s32 flags)
 osal_s32 recv_device_mem_etc(os_kernel_file_stru *fp, osal_u8 *puc_data_buf, osal_s32 len)
 {
     osal_s32 l_ret = -OAL_FAIL;
-    mm_segment_t fs;
+    oal_mm_segment_t fs;
     osal_u8 retry = 3;
     osal_s32 lenbuf = 0;
 
@@ -750,11 +750,12 @@ osal_s32 wifi_device_mem_dump_get_stat_adapt(osal_char *file_name, struct kstat 
     osal_s32 ret = OAL_SUCC;
 #if defined(LINUX_VERSION_CODE) && defined(KERNEL_VERSION) && (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0))
     struct path file_path;
-    ret = user_path_at_empty(AT_FDCWD, file_name, LOOKUP_FOLLOW, &file_path, NULL);
+    ret = kern_path(file_name, LOOKUP_FOLLOW, &file_path);
     if (ret != 0) {
         return ret;
     }
-    vfs_getattr(&file_path, file_stat, STATX_BASIC_STATS, AT_NO_AUTOMOUNT);
+    ret = vfs_getattr(&file_path, file_stat, STATX_BASIC_STATS, AT_NO_AUTOMOUNT);
+    path_put(&file_path);
 #elif (defined(LINUX_VERSION_CODE) && defined(KERNEL_VERSION) && (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0)))
     ret = vfs_stat(file_name, file_stat);
 #endif

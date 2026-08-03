@@ -1,0 +1,16 @@
+# Kernel/module build products
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+.*.cmd
+Module.symvers
+modules.order
+
+# Generated build output
+output/
+
+# Python cache
+__pycache__/
+*.py[cod]

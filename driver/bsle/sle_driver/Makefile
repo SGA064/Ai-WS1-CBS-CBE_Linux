@@ -35,6 +35,7 @@ EXTRA_CFLAGS = $(_INCLUDES)
 EXTRA_CFLAGS += -Werror
 
 EXTRA_CFLAGS += -include $(WSCFG_AUTOCONFIG_H) -include $(PLATFORM_INC_DIR)/oneimage/oneimage.h
+ccflags-y += $(filter-out -Werror,$(EXTRA_CFLAGS))
 
 ifeq ($(WSCFG_USING_LLVM_CLANG), y)
 EXTRA_CFLAGS += -Wno-error=typedef-redefinition
@@ -67,10 +68,10 @@ modules:
 		CC=$(CC) NM=$(NM) AR=$(AR) LD=$(LD) OBJCOPY=$(OBJCOPY) M=$(CUR_MK_DIR) modules KBUILD_MODPOST_WARN=1 ${LOCAL_WSCFG_EXTRA_CFLAGS}
 	$(STRIP) --strip-unneeded $(KO_NAME).ko
 
-else ifeq($(WSCFG_USING_GCC), y)
+else ifeq ($(WSCFG_USING_GCC), y)
 STRIP=$(WSCFG_CROSS_COMPILE)strip
 modules:
-	make -C $(WSCFG_KERNEL_DIR) ARCH=$(WSCFG_ARCH_NAME) CROSS_COMPILE=$(WSCFG_CROSS_COMPILE) M=$(CUR_MK_DIR) modules KBUILD_MODPOST_WARN=1
+	$(MAKE) -C $(WSCFG_KERNEL_DIR) ARCH=$(WSCFG_ARCH_NAME) CROSS_COMPILE=$(WSCFG_CROSS_COMPILE) M=$(CUR_MK_DIR) modules KBUILD_MODPOST_WARN=1
 	$(STRIP) --strip-unneeded $(KO_NAME).ko
 endif
 

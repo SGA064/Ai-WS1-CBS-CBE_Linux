@@ -1,13 +1,14 @@
 /*
  * Copyright (c) CompanyNameMagicTag 2020-2020. All rights reserved.
  */
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include "sle_dev.h"
 #include "sle_tm_chba_proc.h"
 #include "sle_hcc_proc.h"
 #include "sle_host_register.h"
 
 MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("WS73 SparkLink HCC transport");
 
 static uint8_t g_sle_state = SLE_OFF;
 #define SLE_DFR_EVENT_DATA_LEN 7

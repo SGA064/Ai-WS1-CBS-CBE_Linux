@@ -560,6 +560,8 @@ static td_void sdio_reinit_assemble(td_void)
     hcc_queue = &g_sdio_handler->rx_assemble_head;
     hcc_list_free(g_sdio_handler->pst_bus->hcc, hcc_queue);
     g_sdio_handler->tx_assemble_info.assemble_num = 0;
+    g_sdio_handler->current_queue = HCC_QUEUE_COUNT;
+    g_sdio_handler->pst_bus->force_update_queue_id = 1;
 }
 
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
@@ -578,7 +580,11 @@ static td_s32 hcc_sdio_reset_card(struct oal_sdio *sdio_priv)
         return EXT_ERR_FAILURE;
     }
 #else
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+    ret = mmc_hw_reset(sdio_priv->func->card);
+#else
     ret = mmc_hw_reset(sdio_priv->func->card->host);
+#endif
     if (ret < 0) {
         oal_sdio_log(BUS_LOG_ERR, "mmc_hw_reset ret=%d", ret);
         sdio_release_host_keep_order(sdio_priv->func);
@@ -609,14 +615,18 @@ static td_s32 hcc_sdio_reinit(hcc_bus *pst_bus)
         }
         osal_msleep(HCC_SDIO_RESET_DELEY_MS);
     }
+    if (i == HCC_SDIO_RESET_TIMES) {
+        oal_sdio_log(BUS_LOG_ERR, "sdio reset failed; keep bus disabled");
+        return EXT_ERR_FAILURE;
+    }
 #endif
 
     ret = sdio_dev_init(sdio_priv);
-    if (ret < 0) {
+    if (ret != EXT_ERR_SUCCESS) {
         return ret;
     }
     ret = sdio_interrupt_register(sdio_priv);
-    if (ret < 0) {
+    if (ret != EXT_ERR_SUCCESS) {
         return ret;
     }
     /* For sdio mem pg,
@@ -754,11 +764,22 @@ static td_s32 sdio_build_rx_list(struct oal_sdio *sdio_priv, hcc_data_queue *hea
     td_u16 buff_len_t;
     td_u32 sum_len = 0;
     hcc_unc_struc *unc_buf = TD_NULL;
+    hcc_handler *hcc;
 
     /* always should be empty */
     if (OAL_UNLIKELY((!hcc_is_list_empty(head)) || (sdio_priv->pst_bus == TD_NULL))) {
         oal_sdio_log(BUS_LOG_ERR, "param err");
         return EXT_ERR_FAILURE;
+    }
+
+    hcc = (hcc_handler *)sdio_priv->pst_bus->hcc;
+    if (hcc == TD_NULL) {
+        return EXT_ERR_FAILURE;
+    }
+    /* Validate the device's queue ID before the allocator indexes HCC queues. */
+    if (sdio_priv->sdio_extend->comm_reg[0] >= hcc->que_max_cnt) {
+        oal_sdio_log(BUS_LOG_ERR, "invalid rx queue:%u", sdio_priv->sdio_extend->comm_reg[0]);
+        goto failed_netbuf_alloc;
     }
 
     for (i = 1; i < HCC_SDIO_EXTEND_REG_COUNT; i++) {
@@ -893,19 +914,6 @@ td_s32 sdio_interrupt_register(struct oal_sdio *sdio_priv)
     if (g_sdio_intr_mode == INT_MODE_SDIO) {
         sdio_claim_host(sdio_priv->func);
         oal_sdio_log(BUS_LOG_DBG, "sdio_interrupt_register\r\n");
-        /* use sdio bus line data1 for sdio data interrupt */
-#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
-        ret = sdio_claim_irq(sdio_priv->func, sdio_isr);
-#endif
-#if defined(_PRE_OS_VERSION_LITEOS) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LITEOS == _PRE_OS_VERSION)
-        ret = sdio_require_irq(sdio_priv->func, sdio_isr);
-#endif
-        if (ret < 0) {
-            oal_sdio_log(BUS_LOG_ERR, "sdio irq=%d", ret);
-            sdio_release_host_keep_order(sdio_priv->func);
-            return EXT_ERR_FAILURE;
-        }
-
         reg = oal_sdio_func0_read_byte(sdio_priv->func, SDIO_CCCR_INTERRUPT_EXTENSION, &ret);
         if (ret) {
             oal_sdio_log(BUS_LOG_ERR, "read CCCR fail=%d", ret);
@@ -927,6 +935,20 @@ td_s32 sdio_interrupt_register(struct oal_sdio *sdio_priv)
             sdio_release_host_keep_order(sdio_priv->func);
             return ret;
         }
+        /* use sdio bus line data1 for sdio data interrupt */
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+        ret = sdio_claim_irq(sdio_priv->func, sdio_isr);
+#endif
+#if defined(_PRE_OS_VERSION_LITEOS) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LITEOS == _PRE_OS_VERSION)
+        ret = sdio_require_irq(sdio_priv->func, sdio_isr);
+#endif
+        if (ret < 0) {
+            oal_sdio_log(BUS_LOG_ERR, "sdio irq=%d", ret);
+            sdio_release_host_keep_order(sdio_priv->func);
+            return EXT_ERR_FAILURE;
+        }
+
+        sdio_priv->irq_registered = TD_TRUE;
         sdio_release_host_keep_order(sdio_priv->func);
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
         pm_runtime_get_sync(mmc_dev(sdio_priv->func->card->host));
@@ -938,10 +960,11 @@ td_s32 sdio_interrupt_register(struct oal_sdio *sdio_priv)
 
 td_void sdio_interrupt_unregister(struct oal_sdio *sdio_priv)
 {
-    if (g_sdio_intr_mode == INT_MODE_SDIO) {
+    if (g_sdio_intr_mode == INT_MODE_SDIO && sdio_priv->irq_registered) {
         sdio_claim_host(sdio_priv->func);
         /* use sdio bus line data1 for sdio data interrupt */
         sdio_release_irq(sdio_priv->func);
+        sdio_priv->irq_registered = TD_FALSE;
         sdio_release_host_keep_order(sdio_priv->func);
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
         pm_runtime_put_sync(mmc_dev(sdio_priv->func->card->host));
@@ -1019,10 +1042,11 @@ static td_s32 sdio_patch_read_ver_info(struct sdio_func *func, td_u8 *buf, td_u3
     ret = oal_sdio_readsb(func, ver_info, HCC_SDIO_REG_FUNC1_FIFO, xfer_count, TD_FALSE);
     if (ret < 0) {
         oal_sdio_log(BUS_LOG_ERR, "readsb ret=%d", ret);
-    } else {
-        for (i = 0; i < len; i++) {
-            buf[i] = ver_info[i];
-        }
+        osal_kfree(ver_info);
+        return ret;
+    }
+    for (i = 0; i < len; i++) {
+        buf[i] = ver_info[i];
     }
 
     osal_kfree(ver_info);
@@ -1144,7 +1168,9 @@ static td_void sdio_dev_deinit(struct oal_sdio *sdio_priv)
     oal_sdio_writeb(func, 0, HCC_SDIO_REG_FUNC1_INT_ENABLE, &ret);
     sdio_interrupt_unregister(sdio_priv);
     sdio_disable_func(func);
-    sdio_disable_state(sdio_priv->pst_bus, HCC_BUS_STATE_ALL);
+    if (sdio_priv->pst_bus != TD_NULL) {
+        sdio_disable_state(sdio_priv->pst_bus, HCC_BUS_STATE_ALL);
+    }
     sdio_release_host_keep_order(func);
     oal_sdio_log(BUS_LOG_DBG, "sdio_dev_deinit! ");
 }
@@ -1194,9 +1220,7 @@ static td_s32 hcc_sdio_send_ctrl_data(struct oal_sdio *sdio_priv, hcc_trans_queu
     if (queue->queue_id == sdio_priv->current_queue && bus->force_update_queue_id == 0) {
         return ret;
     }
-    sdio_priv->current_queue = queue->queue_id;
     *((td_u32 *)(descr_buf->buf)) = queue->queue_id;
-    bus->force_update_queue_id = 0;
     hcc_print_hex_dump(descr_buf->buf, descr_buf->length, "ctrl data content:");
     hcc_list_add_head(send_head, descr_buf);
 #ifdef PRE_SDIO_FEATURE_FLAT_MEMORY
@@ -1208,6 +1232,14 @@ static td_s32 hcc_sdio_send_ctrl_data(struct oal_sdio *sdio_priv, hcc_trans_queu
 #endif
 
     hcc_list_dequeue(send_head);
+    if (ret == EXT_ERR_SUCCESS) {
+        sdio_priv->current_queue = queue->queue_id;
+        bus->force_update_queue_id = 0;
+    } else {
+        /* A failed write may have reached the device. Reassert the queue. */
+        sdio_priv->current_queue = HCC_QUEUE_COUNT;
+        bus->force_update_queue_id = 1;
+    }
     return ret;
 }
 
@@ -1296,6 +1328,7 @@ static td_u32 hcc_sdio_tx_proc(hcc_bus *bus, hcc_trans_queue *queue, td_u16 *rem
     td_u16 total_send = 0;
     td_u16 tmp_remain = 0;
     hcc_unc_struc *descr_buf;
+    struct oal_sdio *sdio_priv = (struct oal_sdio *)bus->data;
     hcc_data_queue *send_head = &queue->send_head;
     hcc_handler *hcc = (hcc_handler *)(bus->hcc);
     if (hcc == TD_NULL || bus->data == TD_NULL) {
@@ -1305,7 +1338,11 @@ static td_u32 hcc_sdio_tx_proc(hcc_bus *bus, hcc_trans_queue *queue, td_u16 *rem
         oal_sdio_log(BUS_LOG_ERR, "drop sdio netbuflist %u", hcc_list_len(send_head));
         return EXT_ERR_FAILURE;
     }
-    descr_buf = &((struct oal_sdio *)bus->data)->descript_unc;
+    /* Do not submit more descriptors while recovery is pending. */
+    if (sdio_get_state(bus, HCC_BUS_STATE_TX) != TD_TRUE) {
+        return EXT_ERR_FAILURE;
+    }
+    descr_buf = &sdio_priv->descript_unc;
 
     /* step1:
      * SDIO-Host: 发送数据前先发送控制报文，传递队列信息给sdio
@@ -1323,8 +1360,10 @@ static td_u32 hcc_sdio_tx_proc(hcc_bus *bus, hcc_trans_queue *queue, td_u16 *rem
         *((td_u32 *)(descr_buf->buf)) = 0;
     } else if (queue->queue_ctrl->transfer_mode == HCC_ASSEMBLE_MODE) {
         ret = hcc_sdio_bus_assemble_pkg_prepare(&((struct oal_sdio *)bus->data)->tx_assemble_info, queue, &total_send);
-        tmp_remain = (*remain_pkt_nums > total_send) ? (*remain_pkt_nums - total_send) : 0;
-        hcc_sdio_bus_build_next_assemble_descr(bus, queue, tmp_remain);
+        if (ret == EXT_ERR_SUCCESS) {
+            tmp_remain = (*remain_pkt_nums > total_send) ? (*remain_pkt_nums - total_send) : 0;
+            hcc_sdio_bus_build_next_assemble_descr(bus, queue, tmp_remain);
+        }
     }
 
     if (ret != EXT_ERR_SUCCESS) {
@@ -1362,8 +1401,17 @@ static td_u32 hcc_sdio_tx_proc(hcc_bus *bus, hcc_trans_queue *queue, td_u16 *rem
         /* 发送成功全部释放 */
         hcc_list_free(hcc, send_head);
     } else {
-        /* 发送失败全部插回原队列 */
+        /* Restore prefetched packets first, then prepend the failed batch
+         * so their original order is preserved. The device may have accepted
+         * part of the transfer: reset before sending another descriptor. */
+        hcc_list_restore(&queue->queue_info, &sdio_priv->tx_assemble_info.assembled_head);
         hcc_list_restore(&queue->queue_info, send_head);
+        sdio_priv->tx_assemble_info.assemble_num = 0;
+        (td_void)memset_s(descr_buf->buf, descr_buf->length, 0, descr_buf->length);
+        sdio_priv->current_queue = HCC_QUEUE_COUNT;
+        bus->force_update_queue_id = 1;
+        sdio_disable_state(bus, HCC_BUS_STATE_TX);
+        hcc_exception_reset_work();
     }
 
     return (td_u32)ret;
@@ -1399,9 +1447,6 @@ static td_s32 sdio_probe(struct sdio_func *func, TD_CONST struct sdio_device_id 
         return EXT_ERR_FAILURE;
     }
     sdio_priv->func = func;
-#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
-    func->card->host->caps |= MMC_CAP_NONREMOVABLE;
-#endif
     /* func keep a pointer to oal_sdio */
     sdio_set_drvdata(func, sdio_priv);
     if (sdio_dev_init(sdio_priv) != EXT_ERR_SUCCESS) {
@@ -1415,7 +1460,7 @@ static td_s32 sdio_probe(struct sdio_func *func, TD_CONST struct sdio_device_id 
 
     /* register interrupt process function */
     ret = sdio_interrupt_register(sdio_priv);
-    if (ret < 0) {
+    if (ret != EXT_ERR_SUCCESS) {
         goto failed_sdio_int_reg;
     }
 
@@ -1434,9 +1479,11 @@ static td_s32 sdio_probe(struct sdio_func *func, TD_CONST struct sdio_device_id 
     return EXT_ERR_SUCCESS;
 
 failed_sdio_bus_init:
-    sdio_interrupt_unregister(sdio_priv);
 failed_sdio_int_reg:
+    sdio_dev_deinit(sdio_priv);
+    sdio_bus_exit(sdio_priv);
 failed_sdio_dev_init:
+    sdio_set_drvdata(func, TD_NULL);
     sdio_exit_module(sdio_priv);
     return EXT_ERR_FAILURE;
 }
@@ -1572,11 +1619,13 @@ static td_s32 hcc_sdio_read_fn0_reg(hcc_bus *pst_bus, td_u32 reg_addr, td_u32 *v
     mmc_wait_for_req(card->host, &mrq);
     if (cmd.error) {
         oal_sdio_log(BUS_LOG_ERR, "addr:0x%08x cmd.err:%d.\n", reg_addr_org, cmd.error);
+        sg_free_table(&sgtable);
         sdio_release_host_keep_order(sdio_priv->func);
         return EXT_ERR_FAILURE;
     }
     if (data.error) {
         oal_sdio_log(BUS_LOG_ERR, "addr:0x%08x data.err:%d.\n", reg_addr_org, data.error);
+        sg_free_table(&sgtable);
         sdio_release_host_keep_order(sdio_priv->func);
         return EXT_ERR_FAILURE;
     }
@@ -2229,7 +2278,9 @@ static struct sdio_driver g_sdio_driver = {
 static td_s32 sdio_detectcard_change(td_void)
 {
 #ifdef CONFIG_SDIO_RESCAN
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
     hisi_sdio_rescan(1);
+#endif
 #endif
     return EXT_ERR_SUCCESS;
 }
@@ -2609,9 +2660,6 @@ td_void hcc_adapt_sdio_unload(td_void)
 {
     if (g_sdio_handler) {
         sdio_disable_state(g_sdio_handler->pst_bus, HCC_BUS_STATE_ALL);
-#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
-        g_sdio_handler->func->card->host->caps &= ~(MMC_CAP_NONREMOVABLE);
-#endif
         sdio_func_remove(g_sdio_handler);
     }
 }

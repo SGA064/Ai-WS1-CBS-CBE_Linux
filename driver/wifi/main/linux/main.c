@@ -722,12 +722,12 @@ osal_s32 mpxx_host_main_init(void)
     ret = frw_main_init_etc();
     if (ret != OAL_SUCC) {
         wifi_printf("host_main_init: frw_main_init_etc return error code: %d", ret);
-        return ret;
+        return -OAL_EFAIL;
     }
     ret = host_module_init_etc();
     if (ret != OAL_SUCC) {
         wifi_printf("host_main_init: host_module_init_etc return error code: %d", ret);
-        return ret;
+        return -OAL_EFAIL;
     }
 
     wal_ccpriv_register_inetaddr_notifier_etc();
@@ -885,6 +885,7 @@ oal_module_exit(mpxx_host_main_exit);
 #endif
 
 oal_module_license("GPL");
+MODULE_DESCRIPTION("WS73 SDIO Wi-Fi host driver");
 
 #ifdef __cplusplus
 #if __cplusplus

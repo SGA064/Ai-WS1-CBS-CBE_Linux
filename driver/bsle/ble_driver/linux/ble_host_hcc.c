@@ -5,7 +5,7 @@
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <linux/kernel.h>
 #include <linux/skbuff.h>
 
@@ -39,6 +39,7 @@ static bool g_ble_state = BLE_OFF;
 static void ble_open_close_btc_finish_handle(osal_u8 event);
 
 MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("WS73 Bluetooth HCI over HCC");
 static int ext_recv(struct hci_dev *hdev, const void *data, int count);
 
 #if defined(LINUX_VERSION_CODE) && defined(KERNEL_VERSION)
@@ -536,7 +537,9 @@ static int bt_register_hci_dev(void)
     }
 
     bt_set_hci_dev_param(hdev);
+#ifdef HCI_PRIMARY
     hdev->dev_type = HCI_PRIMARY;
+#endif
     #ifdef WSCFG_BUS_USB
     hdev->bus = HCI_USB;
     #else

@@ -13,6 +13,9 @@
 #include "td_type.h"
 #include "hcc_bus.h"
 #include "hcc_queue.h"
+#ifdef __KERNEL__
+#include <linux/version.h>
+#endif
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -110,7 +113,8 @@ struct oal_sdio {
     td_u32 state;	            /* 总线当前状态 */
     struct sdio_func *func;
     td_u8 current_queue;
-    td_u8 rsv[3];
+    td_bool irq_registered;
+    td_u8 rsv[2];
     hcc_unc_struc descript_unc; /* 用来存储描述符的链表节点 */
     sdio_host_assem_info tx_assemble_info;
     hcc_data_queue rx_assemble_head;
@@ -152,7 +156,9 @@ static inline struct oal_sdio *oal_get_sdio_default_handler(osal_void)
 
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
 #ifdef CONFIG_SDIO_RESCAN
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
 extern void hisi_sdio_rescan(int slot);
+#endif
 #endif
 #endif
 
@@ -167,4 +173,3 @@ td_s32 sdio_rescan_device(hcc_bus *pst_bus);
 #endif
 
 #endif
-

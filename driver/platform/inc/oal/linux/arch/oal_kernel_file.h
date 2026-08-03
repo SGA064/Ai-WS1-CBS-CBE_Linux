@@ -25,18 +25,18 @@ extern "C" {
 #endif
 
 typedef struct file     oal_file;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
 typedef mm_segment_t    oal_mm_segment_t;
+#else
+typedef unsigned long   oal_mm_segment_t;
+#endif
 
 OAL_STATIC OAL_INLINE oal_mm_segment_t oal_get_fs(oal_void)
 {
 #if defined(LINUX_VERSION_CODE) && (LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0))
     return get_fs();
 #else
-#ifdef CONFIG_SET_FS
-    return get_fs();
-#else
-    return force_uaccess_begin();
-#endif
+    return 0;
 #endif
 }
 
@@ -45,11 +45,7 @@ OAL_STATIC OAL_INLINE oal_void oal_set_fs(oal_mm_segment_t fs)
 #if defined(LINUX_VERSION_CODE) && (LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0))
     set_fs(fs);
 #else
-#ifdef CONFIG_SET_FS
-    set_fs(fs);
-#else
-    force_uaccess_end(fs);
-#endif
+    (void)fs;
 #endif
 }
 

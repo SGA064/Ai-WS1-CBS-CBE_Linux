@@ -7,6 +7,7 @@
 """
 
 import csv
+import codecs
 import sys
 import os
 import shutil
@@ -28,7 +29,13 @@ def refresh_ini(config_path, ini_map_file, ini_file):
     # csv对照表
     ini_re_mapping = {}
     if os.path.isfile(ini_map_file):
-        with open(ini_map_file, newline="", encoding="gb2312") as f:
+        try:
+            codecs.lookup("gb2312")
+            map_encoding = "gb2312"
+        except LookupError:
+            # Minimal host Python builds may omit the optional CJK codecs.
+            map_encoding = "latin-1"
+        with open(ini_map_file, newline="", encoding=map_encoding) as f:
             reader = csv.reader(f)
             for row in reader:
                 if reader.line_num == 1:

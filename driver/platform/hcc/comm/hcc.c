@@ -218,7 +218,8 @@ td_bool hcc_check_header_vaild(hcc_handler *hcc, hcc_header *hdr)
 
 hcc_service_type hcc_queue_id_2_service_type(hcc_handler *hcc, hcc_queue_dir dir, hcc_queue_type queue_id)
 {
-    if (hcc == TD_NULL) {
+    if (hcc == TD_NULL || (td_u32)dir >= HCC_DIR_COUNT ||
+        (td_u32)queue_id >= hcc->que_max_cnt || hcc->hcc_resource.hcc_queues[dir] == TD_NULL) {
         return HCC_SERVICE_TYPE_MAX;
     }
 
@@ -231,7 +232,11 @@ hcc_service_type hcc_queue_id_2_service_type(hcc_handler *hcc, hcc_queue_dir dir
 
 hcc_service_type hcc_fuzzy_trans_queue_2_service(hcc_handler *hcc, hcc_queue_type queue_id)
 {
-    hcc_service_type serv = hcc_queue_id_2_service_type(hcc, HCC_DIR_TX, queue_id);
+    hcc_service_type serv;
+    if (hcc == TD_NULL) {
+        return HCC_SERVICE_TYPE_MAX;
+    }
+    serv = hcc_queue_id_2_service_type(hcc, HCC_DIR_TX, queue_id);
     if (serv < hcc->srv_max_cnt) {
         return serv;
     }

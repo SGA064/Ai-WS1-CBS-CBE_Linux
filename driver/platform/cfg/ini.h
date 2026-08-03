@@ -9,6 +9,9 @@
 #define __INI_H__
 
 #include "soc_osal.h"
+#ifdef __KERNEL__
+#include <linux/version.h>
+#endif
 
 #define INI_KERNEL_READ_LEN             (512)
 
@@ -84,7 +87,15 @@
 #define INI_FILE_TIMESPEC_UNRECONFIG (0)
 #define INI_FILE_TIMESPEC_RECONFIG   (BIT0)
 #define INI_NVRAM_RECONFIG           (BIT1)
+#ifdef __KERNEL__
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+#define inf_file_get_ctime(file_dentry) inode_get_ctime_sec((file_dentry)->d_inode)
+#else
 #define inf_file_get_ctime(file_dentry) ((file_dentry)->d_inode->i_ctime.tv_sec)
+#endif
+#else
+#define inf_file_get_ctime(file_dentry) (0)
+#endif
 
 #define CONFIG_INI_PLAT_KERNEL_LOG_LEVEL 7
 #define CONFIG_INI_PLAT_REBOOT_TYPE 0

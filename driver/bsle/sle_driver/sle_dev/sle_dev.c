@@ -313,13 +313,19 @@ static void sle_misc_device_deregister(void)
     printk(KERN_INFO"sle_misc_device_deregister sle device have removed\n");
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+static void sle_remove(struct platform_device *dev)
+#else
 static int sle_remove(struct platform_device *dev)
+#endif
 {
     printk(KERN_INFO"%s:%d in\n", __FUNCTION__, __LINE__);
     sle_misc_device_deregister();
     osal_spin_lock_destroy(&g_sle_dev.rx_lock);
     wake_up_interruptible(&g_sle_dev.rx_wait);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
     return EOK;
+#endif
 }
 
 static struct platform_driver sle_platform_driver = {

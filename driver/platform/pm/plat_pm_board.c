@@ -638,11 +638,17 @@ err_init:
     return BOARD_FAIL;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+static void pm_board_remove(struct platform_device *pdev)
+#else
 static osal_s32 pm_board_remove(struct platform_device *pdev)
+#endif
 {
     pm_board_gpio_deinit();
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
     return BOARD_SUCC;
+#endif
 }
 
 #if defined(_PRE_OS_VERSION) && defined(_PRE_OS_VERSION_LINUX) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
@@ -760,4 +766,3 @@ void pm_board_exit(void)
 }
 #endif
 #endif
-

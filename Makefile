@@ -39,6 +39,22 @@ export LIGHT_WSCFG_AUTOCONFIG_H = $(OUTPUT_BIN_DIR)/light_autoconfig.h
 include $(WSCFG_KCONFIG_CONFIG)
 include $(LIGHT_WSCFG_KCONFIG_CONFIG)
 
+# The vendor configuration leaves the kernel path and toolchain empty.  Allow
+# callers to provide them without editing a generated config file, for example:
+#   make KERNEL_DIR=/path/to/linux CROSS_COMPILE=arm-linux-gnueabi- TARGET_ARCH=arm all
+KERNEL_DIR ?= $(WSCFG_KERNEL_DIR)
+CROSS_COMPILE ?= $(WSCFG_CROSS_COMPILE)
+TARGET_KERNEL_DIR ?= $(KERNEL_DIR)
+TARGET_CROSS_COMPILE ?= $(CROSS_COMPILE)
+TARGET_ARCH ?= $(WSCFG_ARCH_NAME)
+export WSCFG_KERNEL_DIR := $(TARGET_KERNEL_DIR)
+export WSCFG_CROSS_COMPILE := $(TARGET_CROSS_COMPILE)
+export WSCFG_ARCH_NAME := $(TARGET_ARCH)
+export KBUILD_EXTRA_SYMBOLS := $(PLATFORM_SRC_DIR)/Module.symvers
+KERNEL_MAKE_VARS := WSCFG_KERNEL_DIR=$(WSCFG_KERNEL_DIR) \
+                    WSCFG_CROSS_COMPILE=$(WSCFG_CROSS_COMPILE) \
+                    WSCFG_ARCH_NAME=$(WSCFG_ARCH_NAME)
+
 export DIR_MAP_CONFIG_FILE = release.mk
 
 ALL_CBB_BUILD_TARGETS := platform wifi
@@ -66,7 +82,7 @@ endif
 # cpu counts
 CPU_NUM := $(shell nproc)
 
-.PHONY: wifi platform ble sle ini hso tools menuconfig ble_android full_build all clean
+.PHONY: wifi wifi_fast platform platform_fast ble sle ini hso tools menuconfig ble_android full_build all clean
 
 all: prepare $(ALL_CBB_BUILD_TARGETS)
 	$(call echo_ok,all built!)
@@ -103,46 +119,68 @@ ini_light: prepare_light
 	@python3 $(SCRIPT_DIR)/hconfig_to_ini.py $(CONFIG_DIR)/ini_map.csv $(SDK_DIR)/Kconfig ${LIGHT_WSCFG_AUTOCONFIG_H} $(OUTPUT_BIN_DIR)/ws73_cfg.ini
 	$(call echo_ok,ini_light file generate success in $(OUTPUT_BIN_DIR)/ws73_cfg.ini!)
 
-wifi: prepare
+wifi: prepare platform
 	cd $(WIFI_SRC_DIR) && \
-    CONFIG_WSXX_KERNEL_MODULES_BUILD_SUPPORT=yes\
-    make -j$(CPU_NUM) && cp -f wifi_soc.ko $(OUTPUT_BIN_DIR)/
+    CONFIG_WSXX_KERNEL_MODULES_BUILD_SUPPORT=yes \
+    $(MAKE) -j$(CPU_NUM) $(KERNEL_MAKE_VARS) \
+    KBUILD_EXTRA_SYMBOLS=$(KBUILD_EXTRA_SYMBOLS) && \
+    cp -f wifi_soc.ko $(OUTPUT_BIN_DIR)/
 	$(call echo_ok,WIFI ko built success in $(OUTPUT_BIN_DIR)/wifi_soc.ko!)
 
-wifi_light: prepare_light
+wifi_fast:
+	@mkdir -p $(OUTPUT_BIN_DIR) $(OUTPUT_BUILD_DIR)
 	cd $(WIFI_SRC_DIR) && \
-    CONFIG_WSXX_KERNEL_MODULES_BUILD_SUPPORT=yes\
-    make -j$(CPU_NUM) && cp -f wifi_soc.ko $(OUTPUT_BIN_DIR)/
+    CONFIG_WSXX_KERNEL_MODULES_BUILD_SUPPORT=yes \
+    $(MAKE) -j$(CPU_NUM) $(KERNEL_MAKE_VARS) \
+    KBUILD_EXTRA_SYMBOLS=$(KBUILD_EXTRA_SYMBOLS) && \
+    cp -f wifi_soc.ko $(OUTPUT_BIN_DIR)/
+	$(call echo_ok,WIFI fast ko built success in $(OUTPUT_BIN_DIR)/wifi_soc.ko!)
+
+wifi_light: prepare_light platform_light
+	cd $(WIFI_SRC_DIR) && \
+    CONFIG_WSXX_KERNEL_MODULES_BUILD_SUPPORT=yes \
+    $(MAKE) -j$(CPU_NUM) $(KERNEL_MAKE_VARS) \
+    KBUILD_EXTRA_SYMBOLS=$(KBUILD_EXTRA_SYMBOLS) && \
+    cp -f wifi_soc.ko $(OUTPUT_BIN_DIR)/
 	$(call echo_ok, wifi_light ko built success in $(OUTPUT_BIN_DIR)/wifi_soc.ko!)
 
 wifi_clean: prepare
 	cd $(WIFI_SRC_DIR) && \
     CONFIG_WSXX_KERNEL_MODULES_BUILD_SUPPORT=yes\
-    make clean
+    make $(KERNEL_MAKE_VARS) clean
 	@find $(WIFI_SRC_DIR) -name "*.o" -exec rm {} \;
 	@find $(WIFI_SRC_DIR) -name "*.cmd" -exec rm {} \;
 
 platform: prepare ini
 	cd $(PLATFORM_SRC_DIR) && \
     BUILD_DEVICE_WITH_ROM_REPO=yes\
-    make -j$(CPU_NUM) && cp -f plat_soc.ko $(OUTPUT_BIN_DIR)/
+    $(MAKE) -j$(CPU_NUM) $(KERNEL_MAKE_VARS) && cp -f plat_soc.ko $(OUTPUT_BIN_DIR)/
 	$(call echo_ok,platform ko built success in $(OUTPUT_BIN_DIR)/plat_soc.ko!)
+
+platform_fast:
+	@mkdir -p $(OUTPUT_BIN_DIR) $(OUTPUT_BUILD_DIR)
+	cd $(PLATFORM_SRC_DIR) && \
+    BUILD_DEVICE_WITH_ROM_REPO=yes\
+    $(MAKE) -j$(CPU_NUM) $(KERNEL_MAKE_VARS) && cp -f plat_soc.ko $(OUTPUT_BIN_DIR)/
+	$(call echo_ok,platform fast ko built success in $(OUTPUT_BIN_DIR)/plat_soc.ko!)
 
 platform_light: prepare_light ini_light
 	cd $(PLATFORM_SRC_DIR) && \
     BUILD_DEVICE_WITH_ROM_REPO=yes\
-    make -j$(CPU_NUM) && cp -f plat_soc.ko $(OUTPUT_BIN_DIR)/
+    $(MAKE) -j$(CPU_NUM) $(KERNEL_MAKE_VARS) && cp -f plat_soc.ko $(OUTPUT_BIN_DIR)/
 	$(call echo_ok,platform_light ko built success in $(OUTPUT_BIN_DIR)/plat_soc.ko!)
 
 platform_clean: prepare
 	cd $(PLATFORM_SRC_DIR) && \
-    make clean
+    make $(KERNEL_MAKE_VARS) clean
 	@find $(PLATFORM_SRC_DIR) -name "*.o" -exec rm {} \;
 	@find $(PLATFORM_SRC_DIR) -name "*.cmd" -exec rm {} \;
 
-ble: prepare
+ble: prepare platform
 	cd $(BSLE_SRC_DIR)/ble_driver/linux && \
-    make -j$(CPU_NUM) && cp -f ble_soc.ko $(OUTPUT_BIN_DIR)/
+    $(MAKE) -j$(CPU_NUM) $(KERNEL_MAKE_VARS) \
+    KBUILD_EXTRA_SYMBOLS=$(KBUILD_EXTRA_SYMBOLS) && \
+    cp -f ble_soc.ko $(OUTPUT_BIN_DIR)/
 	$(call echo_ok,ble_linux ko built success in $(OUTPUT_BIN_DIR)/ble_soc.ko!)
 
 dft_driver: prepare
@@ -168,14 +206,16 @@ dft_ctrl_clean: prepare
 	cd $(BSLE_DFT_DRIVER_SRC_DIR)/bsle_dft_ctrl/linux && \
     make clean
 
-ble_light: prepare_light
+ble_light: prepare_light platform_light
 	cd $(BSLE_SRC_DIR)/ble_driver/linux && \
-    make -j$(CPU_NUM) && cp -f ble_soc.ko $(OUTPUT_BIN_DIR)/
+    $(MAKE) -j$(CPU_NUM) $(KERNEL_MAKE_VARS) \
+    KBUILD_EXTRA_SYMBOLS=$(KBUILD_EXTRA_SYMBOLS) && \
+    cp -f ble_soc.ko $(OUTPUT_BIN_DIR)/
 	$(call echo_ok,ble_light_linux ko built success in $(OUTPUT_BIN_DIR)/ble_soc.ko!)
 
 ble_clean: prepare
 	cd $(BSLE_SRC_DIR)/ble_driver/linux && \
-    make clean
+    $(MAKE) $(KERNEL_MAKE_VARS) clean
 
 ble_android: prepare
 	cd $(BSLE_SRC_DIR)/ble_driver/android && \
@@ -186,19 +226,23 @@ ble_android_clean: prepare
 	cd $(BSLE_SRC_DIR)/ble_driver/android && \
     make clean
 
-sle: prepare
+sle: prepare platform
 	cd $(BSLE_SRC_DIR)/sle_driver && \
-    make -j$(CPU_NUM) && cp -f sle_soc.ko $(OUTPUT_BIN_DIR)/
+    $(MAKE) -j$(CPU_NUM) $(KERNEL_MAKE_VARS) \
+    KBUILD_EXTRA_SYMBOLS=$(KBUILD_EXTRA_SYMBOLS) && \
+    cp -f sle_soc.ko $(OUTPUT_BIN_DIR)/
 	$(call echo_ok,sle ko built success in $(OUTPUT_BIN_DIR)/sle_soc.ko!)
 
-sle_light: prepare_light
+sle_light: prepare_light platform_light
 	cd $(BSLE_SRC_DIR)/sle_driver && \
-    make -j$(CPU_NUM) && cp -f sle_soc.ko $(OUTPUT_BIN_DIR)/
+    $(MAKE) -j$(CPU_NUM) $(KERNEL_MAKE_VARS) \
+    KBUILD_EXTRA_SYMBOLS=$(KBUILD_EXTRA_SYMBOLS) && \
+    cp -f sle_soc.ko $(OUTPUT_BIN_DIR)/
 	$(call echo_ok,sle_light ko built success in $(OUTPUT_BIN_DIR)/sle_soc.ko!)
 
 sle_clean: prepare
 	cd $(BSLE_SRC_DIR)/sle_driver && \
-    make clean
+    $(MAKE) $(KERNEL_MAKE_VARS) clean
 
 hso_clean: prepare
 	@rm -rf $(OUTPUT_DIR)/database_es0
@@ -230,4 +274,3 @@ tools_light: prepare
     SDK_OUTPUT_BUILD_DIR=$(OUTPUT_BUILD_DIR)\
     SDK_OUTPUT_BIN_DIR=$(OUTPUT_BIN_DIR)
 	$(call echo_ok,open source tools built success!)
-

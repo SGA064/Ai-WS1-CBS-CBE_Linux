@@ -29,6 +29,7 @@ EXTRA_CFLAGS = $(_INCLUDES)
 EXTRA_CFLAGS += -Werror
 
 EXTRA_CFLAGS += -include $(WSCFG_AUTOCONFIG_H) -include $(PLATFORM_INC_DIR)/oneimage/oneimage.h
+ccflags-y += $(filter-out -Werror,$(EXTRA_CFLAGS))
 
 else
 $(warning defconfig: ================$(WSCFG_KERNEL_DIR)=======================)
@@ -36,7 +37,7 @@ $(warning defconfig: ================$(WSCFG_KERNEL_DIR)=======================)
 STRIP := $(WSCFG_CROSS_COMPILE)strip
 
 modules:
-	make -C $(WSCFG_KERNEL_DIR) ARCH=$(WSCFG_ARCH_NAME) CROSS_COMPILE=$(WSCFG_CROSS_COMPILE) M=$(CUR_MK_DIR) modules KBUILD_MODPOST_WARN=1
+	$(MAKE) -C $(WSCFG_KERNEL_DIR) ARCH=$(WSCFG_ARCH_NAME) CROSS_COMPILE=$(WSCFG_CROSS_COMPILE) M=$(CUR_MK_DIR) modules KBUILD_MODPOST_WARN=1
 	$(STRIP) --strip-unneeded ble_soc.ko
 
 clean:

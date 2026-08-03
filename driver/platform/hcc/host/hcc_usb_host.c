@@ -445,6 +445,12 @@ static td_s32 usb_rx_netbuf(hcc_bus *pst_bus, hcc_data_queue *data_head)
         return ret;
     }
 
+    /* usb pkg头声明的总长度必须与urb实际收到的字节数一致, 防止解析到残留/无效数据 */
+    if (urb_buf->urb->actual_length != usb->aggr_info[WLAN_TYPE].xfer_count) {
+        urb_list_add_tail(&g_urb_rx_free_queue, urb_buf);
+        return EXT_ERR_USB_INVALID_DATA_LEN_CODE;
+    }
+
     ret = usb_build_rx_netbuf_list(usb, data_head);
     if (ret != EXT_ERR_SUCCESS) {
         oal_usb_log(BUS_LOG_ERR, "rx netbuf list err:[%d]", ret);
@@ -690,11 +696,15 @@ td_void usb_sched_rx_thread(td_void)
 static td_void usb_rx_urb_bulk_submit(struct urb *urb)
 {
     urb_buf_stru *urb_buf = urb->context;
-    /* add urb_buf to work queue. Urb rx handler thread will handle it */
-    if (usb_get_bus_state() != BUS_USB_WORK) {
+    /* 总线错误或长度不足的urb禁止进入数据解析路径, 直接归还free队列重新提交 */
+    if ((urb->status != 0) || (urb->actual_length < HIUSB_PACKAGE_HEARDER_SIZE)) {
+        oal_usb_log(BUS_LOG_ERR, "urb status[%d] len[%u]", urb->status, urb->actual_length);
+        urb_list_add_head(&g_urb_rx_free_queue, urb_buf);
+    } else if (usb_get_bus_state() != BUS_USB_WORK) {
         oal_usb_log(BUS_LOG_ERR, "state");
         urb_list_add_head(&g_urb_rx_free_queue, urb_buf);
     } else {
+        /* add urb_buf to work queue. Urb rx handler thread will handle it */
         urb_list_add_tail(&g_urb_rx_work_queue, urb_buf);
     }
     usb_sched_rx_thread();

@@ -631,6 +631,7 @@ module_init(plat_init_etc);
 module_exit(plat_exit_etc);
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
 osal_module_license("GPL");
+MODULE_DESCRIPTION("WS73 platform transport and firmware support");
 #endif
 
 #ifdef __cplusplus

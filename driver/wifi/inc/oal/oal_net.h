@@ -407,6 +407,15 @@ static inline osal_u8 a2x(const osal_char c)
 
 #define OAL_NETDEVICE_OPS(_pst_dev)                         ((_pst_dev)->netdev_ops)
 #define OAL_NETDEVICE_MAC_ADDR(_pst_dev)                    ((_pst_dev)->dev_addr)
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && \
+    (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION) && \
+    (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0))
+/* Linux 6.18 tracks dev_addr through the address list; direct writes are invalid. */
+#define OAL_NETDEVICE_SET_MAC_ADDR(_pst_dev, _addr)          eth_hw_addr_set((_pst_dev), (_addr))
+#else
+#define OAL_NETDEVICE_SET_MAC_ADDR(_pst_dev, _addr) \
+    oal_set_mac_addr((osal_u8 *)((_pst_dev)->dev_addr), (_addr))
+#endif
 #define OAL_NETDEVICE_IFALIAS(_pst_dev)                     ((_pst_dev)->ifalias)
 #define OAL_NETDEVICE_WDEV(_pst_dev)                        ((_pst_dev)->ieee80211_ptr)
 #define OAL_NETDEVICE_HEADROOM(_pst_dev)                    ((_pst_dev)->needed_headroom)
@@ -1188,7 +1197,11 @@ static inline td_s32 oal_net_device_set_macaddr(oal_net_device_stru *dev, td_voi
 
     mac = (oal_sockaddr_stru *)addr;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+    eth_hw_addr_set(dev, mac->sa_data);
+#else
     (td_void)memcpy_s(dev->dev_addr, ETHER_ADDR_LEN, mac->sa_data, ETHER_ADDR_LEN);
+#endif
     return OAL_SUCC;
 }
 
@@ -1229,12 +1242,12 @@ static inline td_s32 oal_net_device_change_mtu(oal_net_device_stru *dev, td_s32 
 #define oal_netif_rx_ni(pst_netbuf)                 \
 ({                                                  \
     mem_trace_delete_node((osal_ulong)(pst_netbuf)); \
-    netif_rx_ni(pst_netbuf);                        \
+    netif_rx(pst_netbuf);                           \
 })
 #else
 static inline td_s32  oal_netif_rx_ni(oal_netbuf_stru *pst_netbuf)
 {
-    return netif_rx_ni(pst_netbuf);
+    return netif_rx(pst_netbuf);
 }
 #endif
 

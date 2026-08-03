@@ -45,7 +45,7 @@ osal_void wal_set_external_record_enable(osal_u8 enable_value)
 {
     os_kernel_file_stru *fp = {0};
     osal_s32 data_len;
-    mm_segment_t fs;
+    oal_mm_segment_t fs;
 
     memset_s(&fs, sizeof(fs), 0, sizeof(fs));
     if (enable_value == 1) {
@@ -73,7 +73,7 @@ osal_void wal_set_external_record_enable(osal_u8 enable_value)
 static osal_void wal_wifi_external_record_to_file(osal_u8 *data, osal_u32 data_len)
 {
     os_kernel_file_stru *fp = {0};
-    mm_segment_t fs;
+    oal_mm_segment_t fs;
     loff_t pos;
     static osal_s8 tmp_buf[WAL_FUNC_NAME_MAX_LEN] = {0};
     static osal_s32 count = 1;
@@ -428,7 +428,7 @@ osal_s32 wal_set_random_mac_to_mib_etc(oal_net_device_stru *net_dev)
     }
     mac_addr = mac_mib_get_station_id(hmac_vap);
     oal_set_mac_addr(staion_id.station_id, mac_addr);
-    oal_set_mac_addr((osal_u8 *)net_dev->dev_addr, mac_mib_get_station_id(hmac_vap));
+    OAL_NETDEVICE_SET_MAC_ADDR(net_dev, mac_mib_get_station_id(hmac_vap));
 
     ret = wal_sync_post2hmac_no_rsp(hmac_vap->vap_id, WLAN_MSG_W2H_CFG_STATION_ID,
         (osal_u8 *)&staion_id, OAL_SIZEOF(staion_id));
@@ -542,7 +542,8 @@ osal_u32 tid_stat_to_user(osal_u32 *stat)
     /* 0 1 2 3 4 5 6 7 */
     return stat[0] + stat[1] + stat[2] + stat[3] + stat[4] + stat[5] + stat[6] + stat[7];
 }
-#if defined(LINUX_VERSION_CODE) && (LINUX_VERSION_CODE >= KERNEL_VERSION(5,3,0))
+#if defined(LINUX_VERSION_CODE) && (LINUX_VERSION_CODE >= KERNEL_VERSION(5,3,0)) && \
+    (LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0))
 /* 内核升级后 对kernel_read 和 kernel_write 进行了限制 */
 MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
 #endif

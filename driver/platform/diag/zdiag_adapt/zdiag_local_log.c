@@ -121,6 +121,11 @@ void zdiag_local_log_get_sys_time(char *buf, unsigned int buf_len)
 
 static int osal_klib_mkdir(const char *name, umode_t mode)
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+    (void)name;
+    (void)mode;
+    return -EOPNOTSUPP;
+#else
     struct dentry *dentry;
     struct path path;
     int error;
@@ -151,6 +156,7 @@ static int osal_klib_mkdir(const char *name, umode_t mode)
     done_path_create(&path, dentry); // no need use LOOKUP_REVAL
     oam_info(" dir [%s] error=%d\n", name, (int)error);
     return error;
+#endif
 }
 
 static void *diag_local_log_file_create(td_u16 file_pos)
@@ -379,6 +385,10 @@ void zdiag_local_log_init(void)
 
 td_s32 osal_klib_unlink(const char *file_path)
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+    (void)file_path;
+    return -EOPNOTSUPP;
+#else
     td_s32 ret = OSAL_SUCCESS;
     struct file *fp = NULL;
     struct dentry *dentry = NULL;
@@ -410,6 +420,7 @@ td_s32 osal_klib_unlink(const char *file_path)
         oam_error("vfs_unlink fail, ret=0x%x\n", ret);
     }
     return ret;
+#endif
 }
 
 /* before called this, make sure that zdiag_log_mode_get() returns DIAG_LOG_TO_FILE */
@@ -529,7 +540,8 @@ void test_zdiag_local_log_output(void)
     }
 }
 
-#if defined(LINUX_VERSION_CODE) && (LINUX_VERSION_CODE > KERNEL_VERSION(5, 10, 0))
+#if defined(LINUX_VERSION_CODE) && (LINUX_VERSION_CODE > KERNEL_VERSION(5, 10, 0)) && \
+    (LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0))
 MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
 #endif
 #endif

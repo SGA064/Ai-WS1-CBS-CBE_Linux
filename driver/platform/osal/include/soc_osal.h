@@ -9,7 +9,11 @@
 #define __SOC_OSAL_H__
 
 #ifndef CONFIG_NON_OS
+#ifdef __KERNEL__
+#include <linux/stdarg.h>
+#else
 #include <stdarg.h>
+#endif
 #endif
 #ifdef CONFIG_NO_SUPPORT_OSAL
 #include <linux/vmalloc.h>

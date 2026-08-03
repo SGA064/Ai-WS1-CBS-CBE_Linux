@@ -94,12 +94,17 @@ osal_u32 plat_parse_mac_addr(osal_u8 *cust_param_info, osal_u8 *coe_params,
     osal_s8       *pc_token;
     osal_char      *pc_ctx;
     osal_s8       *pc_end = ";";
-    osal_s8       *pc_sep = ",";
+    osal_s8       *pc_sep = ",:";
     osal_u8        param_num = 0;
-    osal_u8       cust_param[CUS_PARAMS_LEN_MAX];
+    osal_u8       cust_param[CUS_PARAMS_LEN_MAX] = {0};
     osal_u32      ret = OAL_FAIL;
+    size_t         param_len = strlen(cust_param_info);
 
-    ret = (osal_u32)memcpy_s(cust_param, CUS_PARAMS_LEN_MAX, cust_param_info, strlen(cust_param_info));
+    if (param_len >= CUS_PARAMS_LEN_MAX) {
+        oal_print_err("parse_mac_addr input is too long\n");
+        return OAL_FAIL;
+    }
+    ret = (osal_u32)memcpy_s(cust_param, CUS_PARAMS_LEN_MAX, cust_param_info, param_len);
     if (ret != OAL_SUCC) {
         oal_print_err("parse_mac_addr memcpy_s failed\n");
         return ret;
@@ -108,7 +113,7 @@ osal_u32 plat_parse_mac_addr(osal_u8 *cust_param_info, osal_u8 *coe_params,
     pc_token = strtok_s(cust_param, pc_end, &pc_ctx);
     if (pc_token == OAL_PTR_NULL) {
         oal_print_err("hwifi_config_sepa_coefficient_from_param read get null value check!\r\n");
-        return OAL_PTR_NULL;
+        return OAL_FAIL;
     }
     pc_token = strtok_s(pc_token, pc_sep, &pc_ctx);
     /* 获取定制化系数 */
@@ -130,17 +135,17 @@ osal_module_export(plat_parse_mac_addr);
 #endif
 
 #ifndef CONFIG_NO_SUPPORT_INI
-#define MAC_ADDR_STR_LEN 64
+#define PLAT_MAC_ADDR_STRING_LEN 64
 osal_u32 get_mac_from_ini(osal_u8 mac[], osal_u8 mac_len)
 {
     osal_u32 ret = OAL_FAIL;
 #if defined(_PRE_OS_VERSION_LITEOS) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LITEOS == _PRE_OS_VERSION)
     return ret;
 #else
-    osal_u8 mac_str[MAC_ADDR_STR_LEN] = {0};
+    osal_u8 mac_str[PLAT_MAC_ADDR_STRING_LEN] = {0};
     osal_u8 data_len;
 
-    ret = (osal_u32)get_cust_conf_string_etc(INI_MODU_PLAT, "mac_addr", mac_str, MAC_ADDR_STR_LEN);
+    ret = (osal_u32)get_cust_conf_string_etc(INI_MODU_PLAT, "mac_addr", mac_str, PLAT_MAC_ADDR_STRING_LEN);
     if (ret != OAL_SUCC) {
         oal_print_err("ini get mac_addr failed\n");
         return ret;
@@ -149,7 +154,7 @@ osal_u32 get_mac_from_ini(osal_u8 mac[], osal_u8 mac_len)
     (data_len == WLAN_MAC_ADDR_LEN)) {
         return OAL_SUCC;
     }
-    return ret;
+    return OAL_FAIL;
 #endif
 }
 #endif
@@ -221,7 +226,7 @@ osal_void init_dev_addr(osal_void)
         }
     }
 
-    random_ether_addr(g_mac_addr.ac_addr);
+    eth_random_addr(g_mac_addr.ac_addr);
     g_mac_addr.ac_addr[1] = RANDOM_DEFOURT_MAC1; /* 1 地址第2位 0x00     */
     g_mac_addr.ac_addr[2] = RANDOM_DEFOURT_MAC2; /* 2 地址第3位 0x73 */
     g_mac_addr.us_status = 0;

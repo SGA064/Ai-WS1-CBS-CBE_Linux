@@ -689,6 +689,19 @@ osal_u32 oal_cfg80211_roamed_etc(oal_net_device_stru *net_device, struct ieee802
     return OAL_SUCC;
 
 #else
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+    struct cfg80211_roam_info info = {
+        .req_ie = req_ie,
+        .req_ie_len = req_ie_len,
+        .resp_ie = resp_ie,
+        .resp_ie_len = resp_ie_len,
+        .links[0] = {
+            .channel = channel,
+            .bss = NULL,
+            .bssid = bssid,
+        },
+    };
+#else
     struct cfg80211_roam_info info = {
         .channel = channel,
         .bss = NULL,
@@ -698,6 +711,7 @@ osal_u32 oal_cfg80211_roamed_etc(oal_net_device_stru *net_device, struct ieee802
         .resp_ie = resp_ie,
         .resp_ie_len = resp_ie_len,
         };
+#endif
     cfg80211_roamed(net_device, &info, gfp);
     return OAL_ERR_CODE_CONFIG_UNSUPPORT;
 #endif
@@ -1009,7 +1023,11 @@ void oal_cfg80211_ch_switch_notify(oal_net_device_stru *pst_netdev,
     cfg80211_ch_switch_notify(pst_netdev, pst_chandef, 0, 0);
 #else
 #if defined(LINUX_VERSION_CODE) && (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0))
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+    cfg80211_ch_switch_notify(pst_netdev, pst_chandef, 0);
+#else
     cfg80211_ch_switch_notify(pst_netdev, pst_chandef);
+#endif
 #endif
 #endif
 }

@@ -351,6 +351,19 @@ LOCAL_WSCFG_EXTRA_PARAMS:=$(subst ",,$(WSCFG_EXTRA_PARAMS))
 
 EXTRA_CFLAGS += ${LOCAL_WSCFG_EXTRA_CFLAGS}
 
+# EXTRA_CFLAGS is no longer consumed by current kbuild releases for external
+# modules. Keep it for the vendor build and mirror it to the supported flag.
+ccflags-y += $(filter-out -Werror -Wtype-limits,$(EXTRA_CFLAGS))
+
+# This vendor tree intentionally exposes many private helpers and keeps old
+# WEXT callback casts. Do not let those legacy patterns hide real type errors
+# in the 6.18 kernel build.
+ccflags-remove-y += -Wmissing-prototypes -Wmissing-declarations -Wcast-function-type
+ccflags-y += -Wno-ignored-qualifiers -Wno-discarded-qualifiers
+ccflags-y += -Wno-implicit-fallthrough -Wno-missing-parameter-type
+ccflags-y += -Wno-old-style-declaration -Wno-override-init -Wno-clobbered
+ccflags-y += -Wno-cast-function-type
+
 ### USING GCC ###
 ifeq ($(WSCFG_USING_GCC), y)
 
@@ -359,7 +372,7 @@ EXTRA_CFLAGS += -Wclobbered -Wmissing-parameter-type -Wold-style-declaration -Wo
 STRIP=$(LOCAL_CROSS_COMPILE)strip
 
 default:
-	$(MAKE) -C $(WSCFG_KERNEL_DIR) ARCH=${WSCFG_ARCH_NAME} CROSS_COMPILE=${LOCAL_CROSS_COMPILE} M=$(CUR_MK_DIR) modules -j KBUILD_MODPOST_WARN=1 \
+	$(MAKE) -C $(WSCFG_KERNEL_DIR) ARCH=${WSCFG_ARCH_NAME} CROSS_COMPILE=${LOCAL_CROSS_COMPILE} M=$(CUR_MK_DIR) modules KBUILD_MODPOST_WARN=1 \
 		$(LOCAL_WSCFG_EXTRA_PARAMS)
 	$(STRIP) --strip-unneeded $(KO_NAME).ko
 
@@ -381,7 +394,7 @@ STRIP=$(LOCAL_CLANG_PATH)/llvm-strip
 
 default:
 	$(MAKE) -C $(WSCFG_KERNEL_DIR) ARCH=${WSCFG_ARCH_NAME} CROSS_COMPILE=${LOCAL_CROSS_COMPILE} \
-		CC=$(CC) NM=$(NM) AR=$(AR) LD=$(LD) OBJCOPY=$(OBJCOPY) M=$(CUR_MK_DIR) modules -j KBUILD_MODPOST_WARN=1 \
+			CC=$(CC) NM=$(NM) AR=$(AR) LD=$(LD) OBJCOPY=$(OBJCOPY) M=$(CUR_MK_DIR) modules KBUILD_MODPOST_WARN=1 \
 		$(LOCAL_WSCFG_EXTRA_PARAMS)
 	$(STRIP) --strip-unneeded $(KO_NAME).ko
 

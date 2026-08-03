@@ -83,59 +83,13 @@ osal_u32 send_message_to_device(plat_data_len_struct *input_data, plat_cfg_h2d_m
 }
 
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION == _PRE_OS_VERSION_LINUX)
-td_slong vfs_ioctl(struct file *filp, td_u32 cmd, td_ulong arg)
-{
-    td_s32 error = -ENOTTY;
-
-    if (!filp->f_op->unlocked_ioctl) {
-        goto out;
-    }
-
-    error = filp->f_op->unlocked_ioctl(filp, cmd, arg);
-    if (error == -ENOIOCTLCMD)
-        error = -ENOTTY;
-    out:
-    return error;
-}
-
-/* 写/dev/random中的随机数 */
 td_s32 write_random_fd(td_u8 *data, td_u16 len)
 {
-    td_s32 ret;
-    struct rand_pool_info* pool;
-    struct file *fp;
-
-    pool = (struct rand_pool_info *)osal_kmalloc((len + sizeof(struct rand_pool_info)), OSAL_GFP_KERNEL);
-    if (pool == OSAL_NULL) {
-        return EXT_ERR_MALLOC_FAILURE;
+    if (data == TD_NULL || len == 0) {
+        return EXT_ERR_TRNG_INVALID_PARAMETER;
     }
 
-    fp = filp_open("/dev/random", O_RDWR | O_NONBLOCK | O_APPEND, 0200); // 0200：只写权限
-    if (!(fp) || IS_ERR(fp)) {
-        fp = OSAL_NULL;
-        osal_printk("open /dev/random failed");
-        osal_kfree(pool);
-        return EXT_ERR_FAILURE;
-    }
-
-    pool->buf_size = len;
-    pool->entropy_count = 8 * pool->buf_size; // 一字节8位
-    ret = memcpy_s(&pool->buf, len, data, len);
-    if (ret != EOK) {
-        osal_kfree(pool);
-        filp_close(fp, NULL);
-        return ret;
-    }
-    ret = vfs_ioctl(fp, RNDADDENTROPY, (unsigned long)(uintptr_t)pool);
-    if (ret != 0) {
-        osal_kfree(pool);
-        filp_close(fp, NULL);
-        osal_printk("ioctl fail\n");
-        return ret;
-    }
-
-    filp_close(fp, NULL);
-    osal_kfree(pool);
+    add_hwgenerator_randomness(data, len, len * 8, false);
     return EXT_ERR_SUCCESS;
 }
 #endif
@@ -211,16 +165,28 @@ EXPORT_SYMBOL(uapi_drv_cipher_trng_get_random_bytes);
 
 td_u32 plat_trng_get_random_saved(td_u8 *data, td_u16 len)
 {
-#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION == _PRE_OS_VERSION_LINUX)
-    write_random_fd(data + READ_DATA_HEAD_LEN, *(td_u32 *)(data + sizeof(td_u32)));
-#endif
+    td_u32 random_len;
 
+    if ((data == TD_NULL) || (len <= READ_DATA_HEAD_LEN) || (len > PLAT_TRNG_RANDOM_BYTES_MAX)) {
 #ifdef CONFIG_PLAT_TRNG_TRIG_RPT
-    if ((len == 0) || (len > PLAT_TRNG_RANDOM_BYTES_MAX)) {
         g_random_st.data_size = 0;
+#endif
         return EXT_ERR_FAILURE;
     }
 
+    random_len = *(td_u32 *)(data + sizeof(td_u32));
+    if ((random_len == 0) || (random_len > (td_u32)(len - READ_DATA_HEAD_LEN))) {
+#ifdef CONFIG_PLAT_TRNG_TRIG_RPT
+        g_random_st.data_size = 0;
+#endif
+        return EXT_ERR_FAILURE;
+    }
+
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION == _PRE_OS_VERSION_LINUX)
+    write_random_fd(data + READ_DATA_HEAD_LEN, (td_u16)random_len);
+#endif
+
+#ifdef CONFIG_PLAT_TRNG_TRIG_RPT
     if (memcpy_s(g_random_st.data, len, data, len) != EOK) {
         g_random_st.data_size = 0;
     } else {

@@ -1050,6 +1050,7 @@ osal_void wlan_get_addr_from_plat(osal_void)
     osal_u32 ret;
     oal_net_device_stru *net_dev = OSAL_NULL;
     hmac_device_stru *hmac_device = OSAL_NULL;
+    osal_u8 mac_addr[WLAN_MAC_ADDR_LEN] = {0};
 
     hmac_device = hmac_res_get_mac_dev_etc(0);
     if (hmac_device == OSAL_NULL) {
@@ -1076,21 +1077,30 @@ osal_void wlan_get_addr_from_plat(osal_void)
     }
 #endif
     net_dev = hmac_device->st_p2p_info.primary_net_device;
-    if ((net_dev != OSAL_NULL) && (wlan_get_mac(net_dev->dev_addr, WLAN_MAC_ADDR_LEN, net_dev) != OAL_SUCC)) {
-        wifi_printf("wlan_get_addr_from_plat: set [%s] mac failed\r\n", net_dev->name);
-        return;
+    if (net_dev != OSAL_NULL) {
+        if (wlan_get_mac(mac_addr, WLAN_MAC_ADDR_LEN, net_dev) != OAL_SUCC) {
+            wifi_printf("wlan_get_addr_from_plat: get [%s] mac failed\r\n", net_dev->name);
+            return;
+        }
+        OAL_NETDEVICE_SET_MAC_ADDR(net_dev, mac_addr);
     }
 #ifdef _PRE_WLAN_FEATURE_P2P
     net_dev = hmac_device->st_p2p_info.p2p_net_device;
-    if ((net_dev != OSAL_NULL) && (wlan_get_mac(net_dev->dev_addr, WLAN_MAC_ADDR_LEN, net_dev) != OAL_SUCC)) {
-        wifi_printf("wlan_get_addr_from_plat: set [%s] mac failed\r\n", net_dev->name);
-        return;
+    if (net_dev != OSAL_NULL) {
+        if (wlan_get_mac(mac_addr, WLAN_MAC_ADDR_LEN, net_dev) != OAL_SUCC) {
+            wifi_printf("wlan_get_addr_from_plat: get [%s] mac failed\r\n", net_dev->name);
+            return;
+        }
+        OAL_NETDEVICE_SET_MAC_ADDR(net_dev, mac_addr);
     }
 #endif
     net_dev = hmac_device->st_p2p_info.second_net_device;
-    if ((net_dev != OSAL_NULL) && (wlan_get_mac(net_dev->dev_addr, WLAN_MAC_ADDR_LEN, net_dev) != OAL_SUCC)) {
-        wifi_printf("wlan_get_addr_from_plat: set [%s] mac failed\r\n", net_dev->name);
-        return;
+    if (net_dev != OSAL_NULL) {
+        if (wlan_get_mac(mac_addr, WLAN_MAC_ADDR_LEN, net_dev) != OAL_SUCC) {
+            wifi_printf("wlan_get_addr_from_plat: get [%s] mac failed\r\n", net_dev->name);
+            return;
+        }
+        OAL_NETDEVICE_SET_MAC_ADDR(net_dev, mac_addr);
     }
 }
 
@@ -1129,7 +1139,7 @@ OAL_STATIC osal_s32  _wal_netdev_set_mac_addr(oal_net_device_stru *net_dev, void
         return -OAL_EINVAL;
     }
 
-    oal_set_mac_addr((osal_u8 *)(net_dev->dev_addr), (osal_u8 *)(mac_addr->sa_data));
+    OAL_NETDEVICE_SET_MAC_ADDR(net_dev, (osal_u8 *)(mac_addr->sa_data));
     ret = wlan_set_mac(net_dev->dev_addr, WLAN_MAC_ADDR_LEN, net_dev);
 
     return (osal_s32)ret;
@@ -1617,7 +1627,7 @@ OAL_STATIC osal_s32 wal_set_mac_addr(oal_net_device_stru *net_dev)
         primary_mac_addr[1] = 0x11;
         primary_mac_addr[2] = 0x02; /* mac地址第2位 */
     }
-    oal_set_mac_addr((osal_u8 *)OAL_NETDEVICE_MAC_ADDR(net_dev), primary_mac_addr);
+    OAL_NETDEVICE_SET_MAC_ADDR(net_dev, primary_mac_addr);
 #endif
 
     return OAL_SUCC;

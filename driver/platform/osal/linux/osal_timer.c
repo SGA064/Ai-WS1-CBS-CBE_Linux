@@ -99,7 +99,11 @@ int osal_timer_stop(osal_timer *timer)
     }
 
     time_info = (struct timer_list_info *)timer->timer;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+    return timer_delete(&time_info->time_list);
+#else
     return del_timer(&time_info->time_list);
+#endif
 }
 EXPORT_SYMBOL(osal_timer_stop);
 
@@ -113,7 +117,11 @@ int osal_timer_destroy(osal_timer *timer)
     }
 
     time_info = (struct timer_list_info *)timer->timer;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+    timer_delete(&time_info->time_list);
+#else
     del_timer(&time_info->time_list);
+#endif
     kfree(time_info);
     timer->timer = NULL;
     return 0;

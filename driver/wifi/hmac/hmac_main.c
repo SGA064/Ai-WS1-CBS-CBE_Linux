@@ -640,6 +640,8 @@ OSAL_STATIC osal_void hmac_register_pm_callback_etc(osal_void)
 
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) \
     && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+#define HMAC_RXDATA_BATCH_BUDGET 64
+
 oal_bool_enum_uint8 hmac_get_rxthread_enable_etc(osal_void)
 {
     return g_st_rxdata_thread_etc.rxthread_enable;
@@ -667,6 +669,7 @@ osal_void hmac_rxdata_netbuf_enqueue_etc(oal_netbuf_stru  *pst_netbuf)
 OAL_STATIC osal_s32 hmac_rxdata_thread(osal_void *p_data)
 {
     oal_netbuf_stru    *pst_netbuf = OAL_PTR_NULL;
+    osal_u32 packet_count;
 
     osal_kthread_set_priority(g_st_rxdata_thread_etc.rxdata_thread, 97); /* 97表示调度优先级 */
     osal_kthread_set_affinity(g_st_rxdata_thread_etc.rxdata_thread, OSAL_CPU_1);
@@ -676,12 +679,26 @@ OAL_STATIC osal_s32 hmac_rxdata_thread(osal_void *p_data)
             break;
         }
 
-        osal_spin_lock(&g_st_rxdata_thread_etc.lock);
-        pst_netbuf = oal_netbuf_delist_nolock(&g_st_rxdata_thread_etc.rxdata_netbuf_head);
-        osal_spin_unlock(&g_st_rxdata_thread_etc.lock);
-        if (pst_netbuf != OAL_PTR_NULL) {
-            oal_netif_rx_ni(pst_netbuf);
+        /* Bound the time with BH disabled so the network backlog can run
+         * between batches, even while producers keep adding packets. */
+        local_bh_disable();
+        for (packet_count = 0; packet_count < HMAC_RXDATA_BATCH_BUDGET; packet_count++) {
+            /* The outer wait consumed the first credit. Take one credit
+             * before each additional dequeue, leaving the next batch's
+             * wakeup intact when the budget is exhausted. */
+            if (packet_count != 0 && down_trylock(&g_st_rxdata_thread_etc.rxdata_sema) != 0) {
+                break;
+            }
+            osal_spin_lock(&g_st_rxdata_thread_etc.lock);
+            pst_netbuf = oal_netbuf_delist_nolock(&g_st_rxdata_thread_etc.rxdata_netbuf_head);
+            osal_spin_unlock(&g_st_rxdata_thread_etc.lock);
+            if (pst_netbuf == OAL_PTR_NULL) {
+                break;
+            }
+            (osal_void)oal_netif_rx_ni(pst_netbuf);
         }
+        local_bh_enable();
+        cond_resched();
     }
     return OAL_SUCC;
 }

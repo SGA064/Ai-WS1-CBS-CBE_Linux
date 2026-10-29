@@ -9,6 +9,7 @@
 #define __OAL_DEBUG_H__
 
 #include "oal_debug_base.h"
+#include <linux/ratelimit.h>
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -31,7 +32,7 @@ extern "C" {
     } while (0)
 
 #define oal_print_err(s, args...)            do { \
-        printk(KERN_EMERG KBUILD_MODNAME ":E]" s, ##args); \
+        printk_ratelimited(KERN_ERR KBUILD_MODNAME ":E]" s, ##args); \
     } while (0)
 
 #define oal_print_production_info(s, args...) do { \
@@ -39,7 +40,7 @@ extern "C" {
     } while (0)
 
 #define oal_print_warning(s, args...)        do { \
-        printk(KERN_EMERG KBUILD_MODNAME ":W]" s, ##args); \
+        printk_ratelimited(KERN_WARNING KBUILD_MODNAME ":W]" s, ##args); \
     } while (0)
 #else
 #define oal_print_emerg(s, args...)          do { \
@@ -63,19 +64,19 @@ extern "C" {
 
 #define oal_print_err(s, args...)            do { \
         if (PLAT_LOG_ERR <= g_plat_loglevel_etc) { \
-            printk(KERN_ERR KBUILD_MODNAME ":E]" s, ##args); \
+            printk_ratelimited(KERN_ERR KBUILD_MODNAME ":E]" s, ##args); \
         } \
     } while (0)
 
 #define oal_print_production_info(s, args...)            do { \
         if (PLAT_LOG_ERR <= g_plat_loglevel_etc) { \
-            printk(KERN_ERR s, ##args); \
+            printk_ratelimited(KERN_ERR s, ##args); \
         } \
     } while (0)
 
 #define oal_print_warning(s, args...)        do { \
         if (PLAT_LOG_WARNING <= g_plat_loglevel_etc) { \
-            printk(KERN_WARNING KBUILD_MODNAME ":W]" s, ##args); \
+            printk_ratelimited(KERN_WARNING KBUILD_MODNAME ":W]" s, ##args); \
         } \
     } while (0)
 #endif

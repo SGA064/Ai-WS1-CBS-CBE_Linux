@@ -104,14 +104,6 @@ osal_void plat_kernel_loglevel_set(osal_s32 log_level)
         log_level = PLAT_LOG_DEBUG;
     }
     g_plat_loglevel_etc = log_level;
-    oal_print_emerg("0:emerg log.\r\n");
-    oal_print_alert("1:alert log.\r\n");
-    oal_print_crit("2:crit log.\r\n");
-    oal_print_err("3:err log.\r\n");
-    oal_print_warning("4:warning log.\r\n");
-    oal_print_notice("5:notice log.\r\n");
-    oal_print_info("6:info log.\r\n");
-    oal_print_dbg("7:dbg log.\r\n");
 }
 
 /* device平台低功耗使能控制 */

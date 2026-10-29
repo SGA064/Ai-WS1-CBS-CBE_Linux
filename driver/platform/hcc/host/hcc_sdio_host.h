@@ -144,6 +144,7 @@ struct oal_sdio {
 
 #ifdef CONFIG_HCC_SUPPORT_SDIO
 extern struct oal_sdio *g_sdio_handler;
+td_bool hcc_sdio_bus_faulted(td_void);
 #endif
 static inline struct oal_sdio *oal_get_sdio_default_handler(osal_void)
 {

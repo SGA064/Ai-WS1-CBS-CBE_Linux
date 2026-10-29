@@ -5,6 +5,9 @@
  */
 
 #if defined(_PRE_OS_VERSION) && defined(_PRE_OS_VERSION_LINUX) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+#ifdef CONFIG_HCC_SUPPORT_SDIO
+#include "hcc_sdio_host.h"
+#endif
 #include <linux/moduleparam.h>
 #include <linux/delay.h>
 #include <linux/rtc.h>
@@ -510,6 +513,13 @@ osal_u32 plat_exception_reset_process(osal_bool should_dump_trace)
 {
     osal_s32 dfr_status;
 
+#ifdef CONFIG_HCC_SUPPORT_SDIO
+    if (hcc_sdio_bus_faulted()) {
+        /* A loose/removable connector cannot be fixed by an endless in-kernel
+         * firmware reset loop. Userspace owns the debounced reload budget. */
+        return FAILURE;
+    }
+#endif
     oal_print_err("plat_exception_reset_work: enter.\r\n");
 
     if (g_dfr_enable_flag != OSAL_TRUE) {

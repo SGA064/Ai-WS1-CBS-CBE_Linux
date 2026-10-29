@@ -21,6 +21,11 @@
 #include "oal_hcc_bus_os_adapt.h"
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
 #include "oal_sdio_linux_adapt.h"
+#include <linux/ratelimit.h>
+#include <linux/workqueue.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+#include "hcc_sdio_reload.h"
+#endif
 #if defined(CONFIG_HCC_SDIO_SUPPORT_SCATTER) && (CONFIG_HCC_SDIO_SUPPORT_SCATTER != 0)
 #define PRE_SDIO_FEATURE_SCATTER
 #else
@@ -71,7 +76,7 @@ extern "C" {
 #define HCC_SDIO_SCATT_MEMBUFFER_ALIGN              4
 #define HCC_SDIO_COMM_REG_OFFSET                    24
 
-#define HCC_SDIO_RESET_TIMES                        40
+#define HCC_SDIO_RESET_TIMES                        3
 #define HCC_SDIO_RESET_DELEY_MS                     50
 
 static td_u32 sdio_align_4_or_blk(td_u32 len)
@@ -114,7 +119,7 @@ char *g_sdio_priv_log = "sdio_priv null";
 #define oal_sdio_log(loglevel, fmt, arg...) \
     do { \
         if (loglevel <= BUS_LOG_INFO) { \
-            printk("%s%s" fmt"[%s:%d]\r\n", SDIO_MODULE_NAME, g_loglevel[loglevel], ##arg, __FUNCTION__, __LINE__); \
+            printk_ratelimited(KERN_WARNING "%s%s" fmt"[%s:%d]\n", SDIO_MODULE_NAME, g_loglevel[loglevel], ##arg, __FUNCTION__, __LINE__); \
         } \
     } while (0)
 #endif
@@ -145,6 +150,7 @@ struct oal_sdio *sdio_init_module(td_void);
 td_void sdio_exit_module(struct oal_sdio *sdio_priv);
 td_void sdio_interrupt_unregister(struct oal_sdio *sdio_priv);
 td_s32 sdio_interrupt_register(struct oal_sdio *sdio_priv);
+static td_void sdio_func_remove(td_void);
 static td_u32 sdio_rx_netbuf(struct oal_sdio *pst_sdio, hcc_data_queue *pst_head);
 #ifdef PRE_SDIO_FEATURE_FLAT_MEMORY
 #define OAL_HDR_TOTAL_LEN    80
@@ -162,6 +168,68 @@ static char *g_sdio_read_fn0_txbuf = TD_NULL;
 #endif
 
 static td_bool g_sdio_rx_forbidden_flag = TD_FALSE;
+
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+/* Registration belongs to the module, not to an inserted card. The bus and
+ * function reference survive remove until HCC has stopped all its workers. */
+static bool g_sdio_driver_registered;
+static int g_sdio_fault;
+module_param_named(sdio_fault, g_sdio_fault, int, 0444);
+MODULE_PARM_DESC(sdio_fault, "0=ready, 1=transport fault, 2=card removed; reload to recover");
+
+static void sdio_fault_stop(struct work_struct *work)
+{
+    struct oal_sdio *sdio_priv = g_sdio_handler;
+    (void)work;
+    if (sdio_priv != TD_NULL) {
+        sdio_interrupt_unregister(sdio_priv);
+    }
+}
+static DECLARE_WORK(g_sdio_fault_work, sdio_fault_stop);
+
+td_bool hcc_sdio_bus_faulted(td_void)
+{
+    return READ_ONCE(g_sdio_fault) != 0;
+}
+
+static void sdio_latch_fault(struct oal_sdio *sdio_priv, int removed)
+{
+    hcc_handler *hcc;
+    if (removed) {
+        WRITE_ONCE(g_sdio_fault, 2);
+    } else if (cmpxchg(&g_sdio_fault, 0, 1) != 0) {
+        return;
+    }
+    if (sdio_priv->pst_bus != TD_NULL) {
+        WRITE_ONCE(sdio_priv->state, 0);
+        sdio_priv->pst_bus->state = 0;
+        hcc = (hcc_handler *)sdio_priv->pst_bus->hcc;
+        if (hcc != TD_NULL) {
+            /* Leave queued buffers owned by HCC until its teardown. */
+            osal_atomic_set(&hcc->hcc_state, HCC_BUS_FORBID);
+        }
+    }
+    if (!removed) {
+        /* Never release an IRQ from its own SDIO IRQ thread. */
+        schedule_work(&g_sdio_fault_work);
+        pr_warn_ratelimited("WS73: SDIO transport stopped; reload after checking the card contact\n");
+    }
+}
+#else
+td_bool hcc_sdio_bus_faulted(td_void)
+{
+    return TD_FALSE;
+}
+#endif
+
+static td_bool sdio_accessible(struct oal_sdio *sdio_priv)
+{
+    if (sdio_priv == TD_NULL || sdio_priv->func == TD_NULL || hcc_sdio_bus_faulted()) {
+        return TD_FALSE;
+    }
+    return TD_TRUE;
+}
+
 
 static struct sdio_device_id TD_CONST sdio_ids[] = {
     { SDIO_DEVICE(0xFFFF, 0x3733) },
@@ -276,96 +344,18 @@ static hcc_bus *sdio_get_bus_handler(td_void)
     return TD_NULL;
 }
 
-#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
-#if defined(LINUX_VERSION_CODE) && defined(KERNEL_VERSION) && (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0))
-static void sdio_release_host_keep_order(struct sdio_func *func)
-{
-    unsigned long flags;
-    struct wait_queue_entry *next;
-    struct list_head *next_task_list;
-    struct mmc_host *host = func->card->host;
-
-    spin_lock_irqsave(&host->lock, flags);
-    if (--host->claim_cnt) {
-        /* Release for nested claim */
-        spin_unlock_irqrestore(&host->lock, flags);
-    } else {
-        host->claimed = 0;
-        host->claimer->task = NULL;
-
-        if (!list_empty(&host->wq.head)) {
-            next_task_list = host->wq.head.prev;
-            next = osal_container_of(next_task_list, struct wait_queue_entry, entry);
-
-            host->claimed = 1;
-            if (host->claimer != NULL) {
-                host->claimer->task = next->private;
-            }
-        }
-
-        spin_unlock_irqrestore(&host->lock, flags);
-        wake_up(&host->wq);
-        pm_runtime_mark_last_busy(mmc_dev(host));
-#if defined(LINUX_VERSION_CODE) && defined(KERNEL_VERSION) && (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0))
-        if (host->caps & MMC_CAP_SYNC_RUNTIME_PM)
-            pm_runtime_put_sync_suspend(mmc_dev(host));
-        else
-            pm_runtime_put_autosuspend(mmc_dev(host));
-#else
-        pm_runtime_put_autosuspend(mmc_dev(host));
-#endif
-    }
-}
-#else
-static void sdio_release_host_keep_order(struct sdio_func *func)
-{
-    unsigned long flags;
-#if defined(LINUX_VERSION_CODE) && defined(KERNEL_VERSION) && (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 1))
-    struct wait_queue_entry *next;
-#else
-    wait_queue_t *next;
-#endif
-    struct list_head *next_task_list;
-    struct mmc_host *host = func->card->host;
-
-    spin_lock_irqsave(&host->lock, flags);
-    if (--host->claim_cnt) {
-        /* Release for nested claim */
-        spin_unlock_irqrestore(&host->lock, flags);
-    } else {
-        host->claimed = 0;
-        host->claimer = NULL;
-#if defined(LINUX_VERSION_CODE) && defined(KERNEL_VERSION) && (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 1))
-        if (!list_empty(&host->wq.head)) {
-            next_task_list = host->wq.head.prev;
-            next = osal_container_of(next_task_list, struct wait_queue_entry, entry);
-#else
-        if (!list_empty(&host->wq.task_list)) {
-            next_task_list = host->wq.task_list.prev;
-            next = osal_container_of(next_task_list, wait_queue_t, task_list);
-#endif
-            host->claimed = 1;
-            host->claimer = next->private;
-        }
-        spin_unlock_irqrestore(&host->lock, flags);
-        wake_up(&host->wq);
-        pm_runtime_mark_last_busy(mmc_dev(host));
-        pm_runtime_put_autosuspend(mmc_dev(host));
-    }
-}
-#endif
-#endif
-
-#if defined(_PRE_OS_VERSION_LITEOS) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LITEOS == _PRE_OS_VERSION)
+/* Use the MMC core's public lock/refcount API. The vendor fairness hack
+ * changed host->claimer and runtime-PM references behind the core's back. */
 static void sdio_release_host_keep_order(struct sdio_func *func)
 {
     sdio_release_host(func);
-    return;
 }
-#endif
 
 static ext_errno hcc_sdio_send_msg(hcc_bus *pst_bus, td_u32 val)
 {
+    if (!sdio_accessible((struct oal_sdio *)pst_bus->data)) {
+        return EXT_ERR_FAILURE;
+    }
     td_s32 ret = EXT_ERR_SUCCESS;
     struct oal_sdio *sdio_priv = (struct oal_sdio *)pst_bus->data;
     struct sdio_func *func = TD_NULL;
@@ -412,6 +402,9 @@ static td_void sdio_ctrl_state(hcc_bus *sdio_bus, td_u32 mask, td_bool enable)
     sdio_priv = (struct oal_sdio *)sdio_bus->data;
 
     old_state = sdio_priv->state;
+    if (enable && !sdio_accessible(sdio_priv)) {
+        return;
+    }
     if (enable) {
         sdio_priv->state |= mask;
     } else {
@@ -454,6 +447,9 @@ static td_s32 sdio_get_state(hcc_bus *pst_bus, td_u32 mask)
 
 static td_s32 hcc_sdio_power_action(hcc_bus *pst_bus, td_u32 action)
 {
+    if (!sdio_accessible((struct oal_sdio *)pst_bus->data)) {
+        return EXT_ERR_FAILURE;
+    }
     if (action == HCC_BUS_POWER_PATCH_LOAD_PREPARE) {
         /* 固件下载过程中关闭SDIO RX */
         g_sdio_rx_forbidden_flag = TD_TRUE;
@@ -598,6 +594,9 @@ static td_s32 hcc_sdio_reset_card(struct oal_sdio *sdio_priv)
 
 static td_s32 hcc_sdio_reinit(hcc_bus *pst_bus)
 {
+    if (!sdio_accessible((struct oal_sdio *)pst_bus->data)) {
+        return EXT_ERR_FAILURE;
+    }
     td_s32 ret = 0;
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
     td_u32 i;
@@ -650,10 +649,15 @@ static td_s32 sdio_data_single_irq(struct oal_sdio *sdio_priv)
     func = sdio_priv->func;
     osal_atomic_set(&g_sdio_int_set, 1);
     /* beacuse get buf may cost lot of time, so release bus first */
-    if (sdio_rx_netbuf(sdio_priv, &sdio_priv->rx_assemble_head) == EXT_ERR_SUCCESS) {
+    /* Firmware download uses this interrupt as a completion only. */
+    if (g_sdio_rx_forbidden_flag != TD_FALSE) {
+        return EXT_ERR_SUCCESS;
+    }
+    td_s32 ret = sdio_rx_netbuf(sdio_priv, &sdio_priv->rx_assemble_head);
+    if (ret == EXT_ERR_SUCCESS && !hcc_is_list_empty(&sdio_priv->rx_assemble_head)) {
         hcc_bus_rx_handler(sdio_priv->pst_bus, sdio_priv->sdio_extend->comm_reg[0], &sdio_priv->rx_assemble_head);
     }
-    return EXT_ERR_SUCCESS;
+    return ret;
 }
 
 static td_s32 sdio_msg_stat(struct oal_sdio *sdio_priv, td_u32 *msg)
@@ -815,8 +819,9 @@ static td_s32 sdio_build_rx_list(struct oal_sdio *sdio_priv, hcc_data_queue *hea
     return EXT_ERR_SUCCESS;
 failed_netbuf_alloc:
     hcc_list_free((hcc_handler *)(sdio_priv->pst_bus->hcc), head);
-    sdio_transfer_rx_reserved_buff(sdio_priv);
-    return EXT_ERR_FAILURE;
+    /* A drained packet after allocation pressure is not a broken SDIO link.
+     * Propagate the actual drain error so only failed I/O stops the bus. */
+    return sdio_transfer_rx_reserved_buff(sdio_priv);
 }
 
 static td_s32 sdio_get_func1_int_status(struct oal_sdio *sdio_priv, td_u8 *int_stat)
@@ -844,7 +849,7 @@ static td_s32 sdio_do_isr(struct oal_sdio *sdio_priv)
     if (OAL_UNLIKELY(ret)) {
         sdio_release_host_keep_order(sdio_priv->func);
         oal_sdio_log(BUS_LOG_ERR, "sdio_extend_buf_get ret=%d", ret);
-        return EXT_ERR_FAILURE;
+        return ret;
     }
 
     ret = sdio_get_func1_int_status(sdio_priv, &int_mask);
@@ -901,7 +906,17 @@ static td_void sdio_isr(struct sdio_func *func)
         return;
     }
 
-    sdio_do_isr(sdio_priv);
+    if (sdio_priv->pst_bus == TD_NULL || sdio_priv->pst_bus->hcc == TD_NULL ||
+        !sdio_accessible(sdio_priv)) {
+        return;
+    }
+    if (sdio_do_isr(sdio_priv) != EXT_ERR_SUCCESS) {
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+        /* Stop a level-triggered interrupt storm instead of reading a broken
+         * link forever. The service performs bounded, debounced recovery. */
+        sdio_latch_fault(sdio_priv, 0);
+#endif
+    }
 }
 
 td_s32 sdio_interrupt_register(struct oal_sdio *sdio_priv)
@@ -960,20 +975,31 @@ td_s32 sdio_interrupt_register(struct oal_sdio *sdio_priv)
 
 td_void sdio_interrupt_unregister(struct oal_sdio *sdio_priv)
 {
-    if (g_sdio_intr_mode == INT_MODE_SDIO && sdio_priv->irq_registered) {
-        sdio_claim_host(sdio_priv->func);
-        /* use sdio bus line data1 for sdio data interrupt */
+    td_bool released = TD_FALSE;
+    if (sdio_priv == TD_NULL || sdio_priv->func == TD_NULL || g_sdio_intr_mode != INT_MODE_SDIO) {
+        return;
+    }
+    sdio_claim_host(sdio_priv->func);
+    if (sdio_priv->irq_registered) {
         sdio_release_irq(sdio_priv->func);
         sdio_priv->irq_registered = TD_FALSE;
-        sdio_release_host_keep_order(sdio_priv->func);
-#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
-        pm_runtime_put_sync(mmc_dev(sdio_priv->func->card->host));
-#endif
+        released = TD_TRUE;
     }
+    sdio_release_host_keep_order(sdio_priv->func);
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+    if (released) {
+        pm_runtime_put_sync(mmc_dev(sdio_priv->func->card->host));
+    }
+#else
+    (void)released;
+#endif
 }
 
 static td_s32 hcc_sdio_sleep_request(hcc_bus *pst_bus)
 {
+    if (!sdio_accessible((struct oal_sdio *)pst_bus->data)) {
+        return EXT_ERR_FAILURE;
+    }
     int ret;
     struct oal_sdio *sdio_priv = (struct oal_sdio *)pst_bus->data;
     if (OAL_WARN_ON(sdio_priv == TD_NULL)) {
@@ -998,6 +1024,9 @@ static td_s32 sdio_wakeup_dev(struct oal_sdio *sdio_priv)
 
 static td_s32 hcc_sdio_wakeup_request(hcc_bus *pst_bus)
 {
+    if (!sdio_accessible((struct oal_sdio *)pst_bus->data)) {
+        return EXT_ERR_FAILURE;
+    }
     td_s32 ret = EXT_ERR_SUCCESS;
     struct oal_sdio *sdio_priv = (struct oal_sdio *)pst_bus->data;
     if (OAL_WARN_ON(sdio_priv == TD_NULL)) {
@@ -1080,6 +1109,9 @@ static td_bool hcc_sdio_patch_int_set(osal_atomic *atomic_in)
 
 static td_s32 hcc_sdio_patch_read(hcc_bus *sdio_bus, td_u8 *buff, td_u32 len, td_u32 timeout)
 {
+    if (!sdio_accessible((struct oal_sdio *)sdio_bus->data)) {
+        return EXT_ERR_FAILURE;
+    }
     td_u8 int_mask;
     td_s32 ret = 0;
     unsigned long timeout_jiffies;
@@ -1127,6 +1159,9 @@ static td_s32 hcc_sdio_patch_read(hcc_bus *sdio_bus, td_u8 *buff, td_u32 len, td
 
 static td_s32 hcc_sdio_patch_write(hcc_bus *sdio_bus, td_u8 *buff, td_u32 len)
 {
+    if (!sdio_accessible((struct oal_sdio *)sdio_bus->data)) {
+        return EXT_ERR_FAILURE;
+    }
     td_s32 ret;
     struct sdio_func *func;
 
@@ -1165,9 +1200,11 @@ static td_void sdio_dev_deinit(struct oal_sdio *sdio_priv)
     func = sdio_priv->func;
 
     sdio_claim_host(func);
-    oal_sdio_writeb(func, 0, HCC_SDIO_REG_FUNC1_INT_ENABLE, &ret);
+    if (sdio_accessible(sdio_priv)) {
+        oal_sdio_writeb(func, 0, HCC_SDIO_REG_FUNC1_INT_ENABLE, &ret);
+        sdio_disable_func(func);
+    }
     sdio_interrupt_unregister(sdio_priv);
-    sdio_disable_func(func);
     if (sdio_priv->pst_bus != TD_NULL) {
         sdio_disable_state(sdio_priv->pst_bus, HCC_BUS_STATE_ALL);
     }
@@ -1189,7 +1226,7 @@ static td_u32 sdio_rx_netbuf(struct oal_sdio *pst_sdio, hcc_data_queue *pst_head
     }
 
     ret = sdio_build_rx_list(pst_sdio, pst_head);
-    if (ret != EXT_ERR_SUCCESS) {
+    if (ret != EXT_ERR_SUCCESS || hcc_is_list_empty(pst_head)) {
         return ret;
     }
 
@@ -1349,6 +1386,9 @@ static td_u32 hcc_sdio_tx_proc(hcc_bus *bus, hcc_trans_queue *queue, td_u16 *rem
      */
     if (hcc_sdio_send_ctrl_data((struct oal_sdio *)bus->data, queue) != EXT_ERR_SUCCESS) {
         oal_sdio_log(BUS_LOG_ERR, "hcc_sdio_send_ctrl_data");
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+        sdio_latch_fault(sdio_priv, 0);
+#endif
         return EXT_ERR_FAILURE;
     }
 
@@ -1411,7 +1451,11 @@ static td_u32 hcc_sdio_tx_proc(hcc_bus *bus, hcc_trans_queue *queue, td_u16 *rem
         sdio_priv->current_queue = HCC_QUEUE_COUNT;
         bus->force_update_queue_id = 1;
         sdio_disable_state(bus, HCC_BUS_STATE_TX);
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+        sdio_latch_fault(sdio_priv, 0);
+#else
         hcc_exception_reset_work();
+#endif
     }
 
     return (td_u32)ret;
@@ -1440,6 +1484,9 @@ static td_s32 sdio_probe(struct sdio_func *func, TD_CONST struct sdio_device_id 
     oal_sdio_log(BUS_LOG_INFO, "sdio func[%d] match vid=0x%x pid=0x%x", sdio_func_num(func),
         ids->vendor, ids->device);
 
+    if (g_sdio_handler != TD_NULL) {
+        return -EBUSY;
+    }
     /* alloce sdio control struct */
     sdio_priv = sdio_init_module();
     if (sdio_priv == TD_NULL) {
@@ -1447,6 +1494,9 @@ static td_s32 sdio_probe(struct sdio_func *func, TD_CONST struct sdio_device_id 
         return EXT_ERR_FAILURE;
     }
     sdio_priv->func = func;
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+    get_device(&func->dev);
+#endif
     /* func keep a pointer to oal_sdio */
     sdio_set_drvdata(func, sdio_priv);
     if (sdio_dev_init(sdio_priv) != EXT_ERR_SUCCESS) {
@@ -1481,6 +1531,9 @@ static td_s32 sdio_probe(struct sdio_func *func, TD_CONST struct sdio_device_id 
 failed_sdio_bus_init:
 failed_sdio_int_reg:
     sdio_dev_deinit(sdio_priv);
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+    cancel_work_sync(&g_sdio_fault_work);
+#endif
     sdio_bus_exit(sdio_priv);
 failed_sdio_dev_init:
     sdio_set_drvdata(func, TD_NULL);
@@ -1544,6 +1597,9 @@ static td_s32 sdio_fn0_reg_fill(struct mmc_request *req, struct mmc_data *data, 
 
 static td_s32 hcc_sdio_write_fn0_reg(hcc_bus *pst_bus, td_u32 reg_addr, td_u32 val)
 {
+    if (!sdio_accessible((struct oal_sdio *)pst_bus->data)) {
+        return EXT_ERR_FAILURE;
+    }
     struct oal_sdio *sdio_priv = (struct oal_sdio *)pst_bus->data;
     struct sg_table sgtable = {0};
     struct mmc_request mrq = {0};
@@ -1595,6 +1651,9 @@ static td_s32 hcc_sdio_write_fn0_reg(hcc_bus *pst_bus, td_u32 reg_addr, td_u32 v
 
 static td_s32 hcc_sdio_read_fn0_reg(hcc_bus *pst_bus, td_u32 reg_addr, td_u32 *val)
 {
+    if (!sdio_accessible((struct oal_sdio *)pst_bus->data)) {
+        return EXT_ERR_FAILURE;
+    }
     struct oal_sdio *sdio_priv = (struct oal_sdio *)pst_bus->data;
     struct sg_table sgtable = {0};
     struct mmc_request mrq = {0};
@@ -1687,6 +1746,9 @@ static td_void sdio_fn0_reg_fill(struct mmc_cmd *cmd, struct mmc_data *data,
 
 static td_s32 hcc_sdio_write_fn0_reg(hcc_bus *pst_bus, td_u32 reg_addr, td_u32 val)
 {
+    if (!sdio_accessible((struct oal_sdio *)pst_bus->data)) {
+        return EXT_ERR_FAILURE;
+    }
     struct oal_sdio *sdio_priv = (struct oal_sdio *)pst_bus->data;
 
     struct mmc_data data = {0};
@@ -1731,6 +1793,9 @@ static td_s32 hcc_sdio_write_fn0_reg(hcc_bus *pst_bus, td_u32 reg_addr, td_u32 v
 
 static td_s32 hcc_sdio_read_fn0_reg(hcc_bus *pst_bus, td_u32 reg_addr, td_u32 *val)
 {
+    if (!sdio_accessible((struct oal_sdio *)pst_bus->data)) {
+        return EXT_ERR_FAILURE;
+    }
     struct oal_sdio *sdio_priv = (struct oal_sdio *)pst_bus->data;
     struct mmc_data data = {0};
     struct mmc_request req = {0};
@@ -2132,31 +2197,24 @@ static td_s32 sdio_transfer_netbuf_list(struct oal_sdio *sdio_priv, hcc_data_que
 
 static td_void sdio_remove(struct sdio_func *func)
 {
-    struct oal_sdio *sdio_priv = TD_NULL;
-
-    if (OAL_WARN_ON(func == TD_NULL)) {
-        oal_sdio_log(BUS_LOG_ERR, "sdio_func null");
-        return;
-    };
-
-    sdio_priv = (struct oal_sdio *)sdio_get_drvdata(func);
+    struct oal_sdio *sdio_priv = sdio_get_drvdata(func);
     if (sdio_priv == TD_NULL) {
-        oal_sdio_log(BUS_LOG_ERR, "%s", g_sdio_priv_log);
         return;
     }
-
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
-    if (g_sdio_read_fn0_txbuf != TD_NULL) {
-        osal_kfree(g_sdio_read_fn0_txbuf);
-        g_sdio_read_fn0_txbuf = TD_NULL;
+    sdio_disable_state(sdio_priv->pst_bus, HCC_BUS_STATE_ALL);
+    if (g_sdio_driver_registered) {
+        sdio_latch_fault(sdio_priv, 1);
     }
 #endif
-
     sdio_dev_deinit(sdio_priv);
-    sdio_bus_exit(sdio_priv);
-    sdio_exit_module(sdio_priv);
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+    sdio_latch_fault(sdio_priv, 1);
+#endif
     sdio_set_drvdata(func, TD_NULL);
-    oal_sdio_log(BUS_LOG_INFO, "sdio_remove...");
+    /* hcc->bus is still owned by wifi_soc/HCC. Free it only from unload,
+     * after hcc_task_exit(), even when this remove was caused by a card pull. */
+    oal_sdio_log(BUS_LOG_INFO, "card detached; bus retained until module unload");
 }
 
 td_s32 hcc_sdio_pm_notify_register(hcc_bus *pst_bus, bus_pm_notify suspend_func, bus_pm_notify resume_func)
@@ -2297,13 +2355,28 @@ static td_s32 sdio_trigger_probe(td_void)
         oal_sdio_log(BUS_LOG_ERR, "fail to detect sdio card\n");
         goto failed_sdio_reg;
     }
+    WRITE_ONCE(g_sdio_fault, 0);
     ret = sdio_register_driver(&g_sdio_driver);
     if (ret) {
         oal_sdio_log(BUS_LOG_ERR, "register sdio ret=%d", ret);
         goto failed_sdio_reg;
     }
+    g_sdio_driver_registered = true;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+    if (!completion_done(&g_sdio_driver_complete)) {
+        /* The MMC core writes FBR before invoking our probe. After an old
+         * firmware-side reset that write can time out before sdio_probe(). */
+        ret = ws73_sdio_retry_probe(&g_sdio_driver);
+        if (ret == 0) {
+            oal_sdio_log(BUS_LOG_INFO, "unbound card reinitialized; probe retried once");
+        } else if (ret != -ENODEV && ret != -EBUSY && ret != -EOPNOTSUPP) {
+            oal_sdio_log(BUS_LOG_ERR, "unbound card recovery failed=%d", ret);
+        }
+        ret = EXT_ERR_SUCCESS;
+    }
+#endif
     do {
-        if (wait_for_completion_timeout(&g_sdio_driver_complete, 10 * HZ)) { // 10 等待10个HZ时间
+        if (wait_for_completion_timeout(&g_sdio_driver_complete, HZ)) {
             oal_sdio_log(BUS_LOG_INFO, "sdio enum done.");
             break;
         }
@@ -2318,7 +2391,7 @@ static td_s32 sdio_trigger_probe(td_void)
         goto failed_sdio_enum;
     }
 
-    if (g_sdio_handler) {
+    if (sdio_accessible(g_sdio_handler)) {
         sdio_disable_state(g_sdio_handler->pst_bus, HCC_BUS_STATE_ALL);
     } else {
         goto failed_sdio_enum;
@@ -2329,7 +2402,7 @@ static td_s32 sdio_trigger_probe(td_void)
     return ret;
 
 failed_sdio_enum:
-    sdio_unregister_driver(&g_sdio_driver);
+    sdio_func_remove();
 failed_sdio_reg:
     return EXT_ERR_FAILURE;
 }
@@ -2352,14 +2425,38 @@ static td_s32 sdio_trigger_probe(td_void)
 }
 #endif
 
-static td_void sdio_func_remove(struct oal_sdio *sdio_priv)
+static td_void sdio_func_remove(td_void)
 {
+    struct oal_sdio *sdio_priv;
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
-    sdio_unregister_driver(&g_sdio_driver);
-    if (sdio_detectcard_change() != EXT_ERR_SUCCESS) {
-        oal_sdio_log(BUS_LOG_ERR, "sdio_detectcard_change fail.\n");
+    if (g_sdio_driver_registered) {
+        g_sdio_driver_registered = false;
+        sdio_unregister_driver(&g_sdio_driver);
+    }
+    cancel_work_sync(&g_sdio_fault_work);
+    if (g_sdio_read_fn0_txbuf != TD_NULL) {
+        osal_kfree(g_sdio_read_fn0_txbuf);
+        g_sdio_read_fn0_txbuf = TD_NULL;
     }
 #endif
+    sdio_priv = g_sdio_handler;
+    if (sdio_priv != TD_NULL) {
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+        /* HCC workers, the driver and its IRQ are now stopped. The card
+         * reference survives until sdio_exit_module(), so a normal unload
+         * can restore the bus left stale by ws73_board_power_reset_hcc(). */
+        int ret = ws73_sdio_reset_unbound(sdio_priv->func);
+        if (ret == 0) {
+            oal_sdio_log(BUS_LOG_INFO, "card reinitialized after driver unload");
+        } else if (ret != -ENODEV && ret != -EBUSY && ret != -EOPNOTSUPP) {
+            oal_sdio_log(BUS_LOG_WARN, "card reinitialization after unload failed=%d", ret);
+        }
+#endif
+#endif
+        sdio_bus_exit(sdio_priv);
+        sdio_exit_module(sdio_priv);
+    }
 }
 
 #define MAX_SCATT_ATTACH_NUM 2
@@ -2533,6 +2630,11 @@ td_void sdio_exit_module(struct oal_sdio *sdio_priv)
     hcc_list_head_deinit(&sdio_priv->tx_assemble_info.assembled_head);
     osal_kfree(sdio_priv->descript_unc.buf);
     osal_kfree(sdio_priv->sdio_extend);
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+    if (sdio_priv->func != TD_NULL) {
+        put_device(&sdio_priv->func->dev);
+    }
+#endif
     osal_kfree(sdio_priv);
     g_sdio_handler = TD_NULL;
 }
@@ -2565,6 +2667,9 @@ td_u32 sdio_func_max_req_size(struct oal_sdio *pst_hi_sdio)
 #ifdef CONFIG_HCC_SUPPORT_FLOW_CONTRL
 static td_s32 hcc_sdio_get_credit(hcc_bus *bus, td_u32 *free_cnt)
 {
+    if (!sdio_accessible((struct oal_sdio *)bus->data)) {
+        return EXT_ERR_FAILURE;
+    }
     struct oal_sdio *sdio_priv = (struct oal_sdio *)bus->data;
     td_u32 ret;
     if (sdio_priv == TD_NULL) {
@@ -2636,7 +2741,14 @@ static td_void sdio_bus_exit(struct oal_sdio *sdio_priv)
     if (sdio_priv->pst_bus == TD_NULL) {
         return;
     }
+    /* IRQ and HCC transfer workers are stopped before unload. Prefetched
+     * buffers may still be owned by these private queues after a card pull. */
+    if (sdio_priv->pst_bus->hcc != TD_NULL) {
+        hcc_list_free(sdio_priv->pst_bus->hcc, &sdio_priv->rx_assemble_head);
+        hcc_list_free(sdio_priv->pst_bus->hcc, &sdio_priv->tx_assemble_info.assembled_head);
+    }
     hcc_free_bus(sdio_priv->pst_bus);
+    sdio_priv->pst_bus = TD_NULL;
 }
 
 hcc_bus *hcc_adapt_sdio_load(td_void)
@@ -2651,6 +2763,7 @@ hcc_bus *hcc_adapt_sdio_load(td_void)
     }
     pst_bus = sdio_get_bus_handler();
     if (pst_bus == TD_NULL) {
+        sdio_func_remove();
         return TD_NULL;
     }
     return pst_bus;
@@ -2660,8 +2773,9 @@ td_void hcc_adapt_sdio_unload(td_void)
 {
     if (g_sdio_handler) {
         sdio_disable_state(g_sdio_handler->pst_bus, HCC_BUS_STATE_ALL);
-        sdio_func_remove(g_sdio_handler);
     }
+    /* Unregister even after physical removal or a failed probe. */
+    sdio_func_remove();
 }
 
 #ifdef CONFIG_SDIO_DEBUG

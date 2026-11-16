@@ -118,8 +118,12 @@ char *g_sdio_priv_log = "sdio_priv null";
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
 #define oal_sdio_log(loglevel, fmt, arg...) \
     do { \
-        if (loglevel <= BUS_LOG_INFO) { \
-            printk_ratelimited(KERN_WARNING "%s%s" fmt"[%s:%d]\n", SDIO_MODULE_NAME, g_loglevel[loglevel], ##arg, __FUNCTION__, __LINE__); \
+        if (loglevel == BUS_LOG_ERR) { \
+            pr_err_ratelimited("%s%s" fmt"[%s:%d]\n", SDIO_MODULE_NAME, g_loglevel[loglevel], ##arg, __FUNCTION__, __LINE__); \
+        } else if (loglevel == BUS_LOG_WARN) { \
+            pr_warn_ratelimited("%s%s" fmt"[%s:%d]\n", SDIO_MODULE_NAME, g_loglevel[loglevel], ##arg, __FUNCTION__, __LINE__); \
+        } else { \
+            pr_debug("%s%s" fmt"[%s:%d]\n", SDIO_MODULE_NAME, g_loglevel[loglevel], ##arg, __FUNCTION__, __LINE__); \
         } \
     } while (0)
 #endif

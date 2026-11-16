@@ -147,7 +147,7 @@ osal_u32 get_mac_from_ini(osal_u8 mac[], osal_u8 mac_len)
 
     ret = (osal_u32)get_cust_conf_string_etc(INI_MODU_PLAT, "mac_addr", mac_str, PLAT_MAC_ADDR_STRING_LEN);
     if (ret != OAL_SUCC) {
-        oal_print_err("ini get mac_addr failed\n");
+        oal_print_info("ini get mac_addr failed\n");
         return ret;
     }
     if ((plat_parse_mac_addr(mac_str, mac, &data_len, WLAN_MAC_ADDR_LEN) == OAL_SUCC) &&

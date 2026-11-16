@@ -177,7 +177,7 @@ td_u32 plat_custom_get_kern_loglevel(td_void)
     }
 
     plat_kernel_loglevel_set(plat_kernel_log_level);
-    oal_print_err("custom ini[plat kern log level]: %d.\n", plat_kernel_loglevel_get());
+    oal_print_info("custom ini[plat kern log level]: %d.\n", plat_kernel_loglevel_get());
 #endif
     return ret;
 }
@@ -521,7 +521,7 @@ oal_int32 plat_init_etc(void)
     pm_create_resume_workqueue();
 #endif
     /* 启动完成后，输出打印 */
-    oal_print_warning("plat_init_etc::succ!\n\n");
+    oal_print_info("plat_init_etc::succ!\n\n");
 
     return OAL_SUCC;
 
@@ -615,7 +615,7 @@ oal_void plat_exit_etc(oal_void)
 #endif
 #endif
 
-    oal_print_err("plat_exit_etc::succ!\n");
+    oal_print_info("plat_exit_etc::succ!\n");
     return;
 }
 

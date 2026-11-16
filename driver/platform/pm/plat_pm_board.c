@@ -159,7 +159,9 @@ td_s32 pm_board_wakeup_gpio_init(td_void)
     wkup_gpio_trigger = (wkup_gpio_trigger == 0) ? IRQF_TRIGGER_FALLING : IRQF_TRIGGER_RISING;
 
     if (!pm_board_is_gpio_idx_valid(wkup_gpio_idx)) {
-        oal_print_err("board_wakeup_gpio_init::get wkup_gpio_idx invalid, value=[%d]. \n", wkup_gpio_idx);
+        if (wkup_gpio_idx != GPIO_IDX_INVALID) {
+            oal_print_err("board_wakeup_gpio_init::get wkup_gpio_idx invalid, value=[%d]. \n", wkup_gpio_idx);
+        }
         goto GET_WKUP_GPIO_FAIL;
     }
 
@@ -202,7 +204,9 @@ static osal_s32 oal_pm_gpio_init(osal_s32 power_gpio_idx, osal_s32 power_on_leve
 {
     osal_s32 ret;
     if (!pm_board_is_gpio_idx_valid(power_gpio_idx)) {
-        oal_print_err("board_power_gpio_init::get power_gpio_idx invalid, value=[%d]. \n", power_gpio_idx);
+        if (power_gpio_idx != GPIO_IDX_INVALID) {
+            oal_print_err("board_power_gpio_init::get power_gpio_idx invalid, value=[%d]. \n", power_gpio_idx);
+        }
         return BOARD_FAIL;
     }
 

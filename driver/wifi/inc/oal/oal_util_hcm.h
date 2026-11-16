@@ -31,6 +31,9 @@ extern "C" {
 #ifdef _PRE_WIFI_PRINTK
 #ifdef CONTROLLER_CUSTOMIZATION
 #define wifi_printf(fmt, ...) printk(KERN_EMERG KBUILD_MODNAME "[%s:%d]:" fmt, __FUNCTION__, __LINE__, ##__VA_ARGS__)
+#elif defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+/* Routine Wi-Fi tracing must not inherit printk's warning severity. */
+#define wifi_printf(fmt, arg...) pr_debug(fmt, ##arg)
 #else
 #define wifi_printf(fmt, arg...) osal_printk(fmt, ##arg)
 #endif

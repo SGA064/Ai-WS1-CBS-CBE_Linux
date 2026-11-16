@@ -79,7 +79,7 @@ int firmware_download_function(void)
     }
     start_time = ktime_get();
     oal_wake_lock(&pm_data->st_wakelock);
-    oal_print_err("firmware_download_etc begin\n");
+    oal_print_info("firmware_download_etc begin\n");
     ret = firmware_download_etc();
     if (ret < 0) {
         oal_wake_unlock(&pm_data->st_wakelock);
@@ -94,7 +94,7 @@ int firmware_download_function(void)
     total_time = (unsigned long long)ktime_to_us(trans_time);
     max_time = total_time > max_time ? total_time : max_time;
     count++;
-    oal_print_warning("download firmware, count [%llu], current time [%llu]us, max time [%llu]us\n", count, total_time,
+    oal_print_info("download firmware, count [%llu], current time [%llu]us, max time [%llu]us\n", count, total_time,
         max_time);
 
     return OAL_SUCC;
@@ -304,7 +304,7 @@ osal_s32 pm_svc_power_on(void)
     }
 
     num++;
-    oal_print_warning("power on, count [%llu], current time [%llu]us, max time [%llu]us\n", num, total_time,
+    oal_print_info("power on, count [%llu], current time [%llu]us, max time [%llu]us\n", num, total_time,
         max_download_time);
     return OAL_SUCC;
 }

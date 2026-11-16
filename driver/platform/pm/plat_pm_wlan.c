@@ -290,7 +290,7 @@ static oal_int32 wlan_open_etc(osal_void)
     osal_mutex_lock(&pm_data->host_mutex);
     if (pst_wlan_pm->wlan_state == WLAN_STATE_OPEN) {
         osal_mutex_unlock(&pm_data->host_mutex);
-        oal_print_err("%s, already opend\n", __func__);
+        oal_print_info("%s, already opend\n", __func__);
         return OAL_ERR_CODE_ALREADY_OPEN;
     }
 
@@ -380,7 +380,7 @@ static osal_u32 wlan_close_etc(osal_void)
     if ((pst_wlan_pm->pm_power_state == POWER_STATE_SHUTDOWN) ||
         (pst_wlan_pm->wlan_state == WLAN_STATE_SHUTDOWN)) {
         osal_mutex_unlock(&pm_data->host_mutex);
-        oal_print_err("%s, already closed\n", __func__);
+        oal_print_info("%s, already closed\n", __func__);
         return OAL_ERR_CODE_ALREADY_CLOSE;
     }
 
@@ -391,7 +391,7 @@ static osal_u32 wlan_close_etc(osal_void)
     }
 
     if (exit_later_func != OSAL_NULL) {
-        oal_print_err("%s, exit_later_func\n", __func__);
+        oal_print_info("%s, exit_later_func\n", __func__);
         exit_later_func();
     } else {
         oal_print_err("%s, miss exit_later_func\n", __func__);
@@ -433,7 +433,7 @@ EXPORT_SYMBOL_GPL(wlan_close_ex);
 oal_int32 wlan_power_open_cmd(oal_void)
 {
     oal_int32 ret;
-    oal_print_err("wlan_power_open_cmd");
+    oal_print_info("wlan_power_open_cmd");
     oam_warning_log0(0, OAM_SF_PWR, "Send H2D_MSG_WLAN_OPEN cmd");
     ret = hcc_send_message(HCC_CHANNEL_AP, H2D_MSG_WLAN_OPEN, HCC_ACTION_TYPE_TEST); /* can wakeup dev */
     if (ret != OAL_SUCC) {
@@ -522,7 +522,7 @@ oal_void pm_bsle_close(oal_void)
 oal_int32 pm_init_n_firmware_download(struct pm_drv_data *pm_data, osal_bool *is_first_svc)
 {
     oal_int32 ret;
-    oal_print_err("pm_svc_open::first svc open, pm_svc_power_on! \n");
+    oal_print_info("pm_svc_open::first svc open, pm_svc_power_on! \n");
     if (!pm_data->st_wakelock.lock_count) {
         /* make sure open only lock once */
         oal_wake_lock(&pm_data->st_wakelock);
@@ -536,7 +536,7 @@ oal_int32 pm_init_n_firmware_download(struct pm_drv_data *pm_data, osal_bool *is
         return ret;
     }
     *is_first_svc = OSAL_TRUE;
-    oal_print_warning("pm_svc_open::first svc open, pm_svc_power_on succ! \n");
+    oal_print_info("pm_svc_open::first svc open, pm_svc_power_on succ! \n");
     init_completion(&pm_data->dev_wlan_ready);
     return OAL_SUCC;
 }
@@ -552,7 +552,7 @@ osal_s32 pm_svc_open(osal_u8 service, osal_bool is_insmod)
 
     // 用于区分wlan的insmod与业务启停
     if (!is_insmod) {
-        oal_print_err("pm_svc_open::not insmod service[%u], return already opened. \n", service);
+        oal_print_info("pm_svc_open::not insmod service[%u], return already opened. \n", service);
         return OAL_ERR_CODE_ALREADY_OPEN;
     }
 
@@ -600,7 +600,7 @@ osal_s32 pm_svc_open(osal_u8 service, osal_bool is_insmod)
     // 对BSLE进行初始化之后的处理
     if (service == PM_SVC_WLAN) {
         // wlan业务启动, 通过hcc通知device侧启动业务
-        oal_print_err("pm_svc_open::wlan open. \n");
+        oal_print_info("pm_svc_open::wlan open. \n");
     } else {
         if (!(pst_wlan_pm->pm_svc_state[PM_SVC_BLE] || pst_wlan_pm->pm_svc_state[PM_SVC_SLE])) {
             pm_bsle_open();
@@ -622,7 +622,7 @@ osal_s32 pm_svc_open(osal_u8 service, osal_bool is_insmod)
     pst_wlan_pm->pm_svc_state[service] = OAL_TRUE;
     oal_wake_unlock(&pm_data->st_wakelock);
     osal_mutex_unlock(&pm_data->host_mutex);
-    oal_print_err("pm_svc_open::SUCC! \n");
+    oal_print_info("pm_svc_open::SUCC! \n");
     return OAL_SUCC;
 }
 
@@ -656,7 +656,7 @@ osal_s32 pm_svc_close(osal_u8 service, osal_u8 is_rmmod)
     struct pm_drv_data *pm_data = pm_get_drvdata();
 
     if (!is_rmmod) {
-        oal_print_err("pm_svc_close::not rmmod svc [%u], return. \n", service);
+        oal_print_info("pm_svc_close::not rmmod svc [%u], return. \n", service);
         return OAL_FAIL;
     }
 
@@ -676,21 +676,21 @@ osal_s32 pm_svc_close(osal_u8 service, osal_u8 is_rmmod)
 
     // 判断该业务是否已经关闭
     if (pst_wlan_pm->pm_svc_state[service] == PM_SVC_STATE_SHUTDOWN) {
-        oal_print_err("pm_svc_close::svc [%u] already closed \n", service);
+        oal_print_info("pm_svc_close::svc [%u] already closed \n", service);
         osal_mutex_unlock(&pm_data->host_mutex);
         return OAL_ERR_CODE_ALREADY_CLOSE;
     }
 
     // 更新业务标志位
     pst_wlan_pm->pm_svc_state[service] = PM_SVC_STATE_SHUTDOWN;
-    oal_print_err("pm_svc_close::cur_state: wlan[%u] ble[%u] sle[%u] \n",
+    oal_print_info("pm_svc_close::cur_state: wlan[%u] ble[%u] sle[%u] \n",
         pst_wlan_pm->pm_svc_state[PM_SVC_WLAN],
         pst_wlan_pm->pm_svc_state[PM_SVC_BLE],
         pst_wlan_pm->pm_svc_state[PM_SVC_SLE]);
 
     // 分业务进行业务关闭处理, 处理失败时继续往下执行
     if (service == PM_SVC_WLAN) {
-        oal_print_err("pm_svc_close::wlan close, send message. \n");
+        oal_print_info("pm_svc_close::wlan close, send message. \n");
     } else {
         bsle_open_close_cmd(service, OSAL_FALSE);
         if (pst_wlan_pm->pm_svc_state[PM_SVC_BLE] == PM_SVC_STATE_SHUTDOWN &&
@@ -703,7 +703,7 @@ osal_s32 pm_svc_close(osal_u8 service, osal_u8 is_rmmod)
     if (!(pst_wlan_pm->pm_svc_state[PM_SVC_WLAN] ||
           pst_wlan_pm->pm_svc_state[PM_SVC_BLE] ||
           pst_wlan_pm->pm_svc_state[PM_SVC_SLE])) {
-        oal_print_err("pm_svc_close::all svc closed, deinit! \n");
+        oal_print_info("pm_svc_close::all svc closed, deinit! \n");
 #if defined(CONFIG_PLAT_SUPPORT_DFR)
         plat_dfr_enable_set(OSAL_FALSE);
 #endif

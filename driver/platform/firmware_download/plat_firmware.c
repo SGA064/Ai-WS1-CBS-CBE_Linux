@@ -1086,7 +1086,7 @@ static osal_s32 start_parse_file_etc(osal_char *path, unsigned long addr)
         oal_print_err("[%s] sha256sum check fail!!\n", path);
         return -OAL_FAIL;
     }
-    oal_print_err("[%s] sha256sum check succ!!\n", path);
+    oal_print_info("[%s] sha256sum check succ!!\n", path);
 #endif
 
     fp = osal_klib_fopen(path, O_RDONLY, 0);
@@ -1285,7 +1285,7 @@ osal_s32 firmware_download_etc(void)
     firmware_buf_deinit();
 
     osal_mutex_unlock(&g_firmware_mutex);
-    oal_print_err("firmware_download_etc::succ! \n");
+    oal_print_info("firmware_download_etc::succ! \n");
 
     return OAL_SUCC;
 

@@ -1322,7 +1322,7 @@ td_void plat_misc_init(td_void)
         oal_print_err("init osal random wait_read failed\n");
     }
 #endif
-    oal_print_warning("plat_misc_init!\r\n");
+    oal_print_info("plat_misc_init!\r\n");
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
     ul_ret = wal_ccpriv_create_proc_etc(OAL_PTR_NULL);
     if (ul_ret != EXT_ERR_SUCCESS) {

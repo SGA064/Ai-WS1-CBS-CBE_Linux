@@ -260,7 +260,7 @@ td_void pm_wakelocks_release_detect(struct pm_drv_data *pm_data)
 td_u32 pm_device_init_ready(td_u8 *param)
 {
     struct pm_drv_data *pm_data = (struct pm_drv_data *)param;
-    oal_print_err("===wlan READY==\n");
+    oal_print_info("===wlan READY==\n");
     complete(&pm_data->dev_wlan_ready);
     return OAL_SUCC;
 }
@@ -268,7 +268,7 @@ td_u32 pm_device_init_ready(td_u8 *param)
 td_u32 pm_bsp_init_ready(td_u8 *param)
 {
     struct pm_drv_data *pm_data = (struct pm_drv_data *)param;
-    oal_print_err("===BSP READY==\n");
+    oal_print_info("===BSP READY==\n");
     complete(&pm_data->dev_bsp_ready);
     hcc_switch_status(HCC_ON);
     return OAL_SUCC;

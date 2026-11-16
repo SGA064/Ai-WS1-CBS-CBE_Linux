@@ -14,6 +14,7 @@
 #endif
 #include <linux/time.h>
 #include <linux/fs.h>
+#include <linux/vmalloc.h>
 #endif /* end of (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION) */
 
 #include "ini.h"
@@ -49,6 +50,100 @@ ini_param_version_stru g_param_version_etc = {{0}};
 
 osal_slong g_ini_file_time_sec = 0;
 
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
+#define INI_CACHE_MAX_SIZE (64 * 1024)
+
+/* Protected by file_mutex_etc. Keep the existing parser, but satisfy its many
+ * small, overlapping reads from one bounded snapshot. Open the requested path
+ * for each lookup so replacement, removal and permission failures stay visible.
+ * Pin the inode to prevent identity reuse after an atomic file replacement. */
+static struct {
+    struct inode *inode;
+    struct timespec64 mtime;
+    struct timespec64 ctime;
+    loff_t size;
+    char *data;
+    ini_file *reader;
+} g_ini_cache;
+
+static void ini_cache_clear(void)
+{
+    vfree(g_ini_cache.data);
+    if (g_ini_cache.inode != NULL) {
+        iput(g_ini_cache.inode);
+    }
+    memset(&g_ini_cache, 0, sizeof(g_ini_cache));
+}
+
+static void ini_cache_times(struct inode *inode, struct timespec64 *mtime, struct timespec64 *ctime)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 7, 0)
+    *mtime = inode_get_mtime(inode);
+#else
+    mtime->tv_sec = inode->i_mtime.tv_sec;
+    mtime->tv_nsec = inode->i_mtime.tv_nsec;
+#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+    *ctime = inode_get_ctime(inode);
+#else
+    ctime->tv_sec = inode->i_ctime.tv_sec;
+    ctime->tv_nsec = inode->i_ctime.tv_nsec;
+#endif
+}
+
+static bool ini_cache_matches(ini_file *fp)
+{
+    struct timespec64 mtime, ctime;
+    struct inode *inode = file_inode(fp);
+
+    ini_cache_times(inode, &mtime, &ctime);
+    return g_ini_cache.inode == inode && g_ini_cache.size == i_size_read(inode) &&
+        timespec64_equal(&g_ini_cache.mtime, &mtime) && timespec64_equal(&g_ini_cache.ctime, &ctime);
+}
+
+static void ini_cache_prepare(ini_file *fp)
+{
+    struct inode *inode = file_inode(fp);
+    loff_t pos = 0;
+    ssize_t ret;
+
+    g_ini_cache.reader = NULL;
+    if (g_ini_cache.data != NULL && ini_cache_matches(fp)) {
+        g_ini_cache.reader = fp;
+        return;
+    }
+    ini_cache_clear();
+    g_ini_cache.size = i_size_read(inode);
+    if (!S_ISREG(inode->i_mode) || g_ini_cache.size <= 0 || g_ini_cache.size > INI_CACHE_MAX_SIZE) {
+        return;
+    }
+    g_ini_cache.inode = igrab(inode);
+    if (g_ini_cache.inode == NULL) {
+        return;
+    }
+    ini_cache_times(inode, &g_ini_cache.mtime, &g_ini_cache.ctime);
+    g_ini_cache.data = vmalloc(g_ini_cache.size);
+    if (g_ini_cache.data == NULL) {
+        ini_cache_clear();
+        return;
+    }
+    while (pos < g_ini_cache.size) {
+        ret = kernel_read(fp, g_ini_cache.data + pos, g_ini_cache.size - pos, &pos);
+        if (ret <= 0) {
+            ini_cache_clear();
+            return;
+        }
+    }
+    if (!ini_cache_matches(fp)) {
+        ini_cache_clear();
+        return;
+    }
+    g_ini_cache.reader = fp;
+}
+#endif
+#endif
+
 static osal_s32 ko_read_line(ini_file *fp, char *addr)
 {
     osal_s32 ret;
@@ -57,7 +152,13 @@ static osal_s32 ko_read_line(ini_file *fp, char *addr)
 #if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0))
     loff_t last_pos = fp->f_pos;
-    ret = kernel_read(fp, tmp, MAX_READ_LINE_NUM, &fp->f_pos);
+    if (g_ini_cache.reader == fp && fp->f_pos >= 0) {
+        ret = fp->f_pos < g_ini_cache.size ?
+            min_t(loff_t, MAX_READ_LINE_NUM, g_ini_cache.size - fp->f_pos) : 0;
+        memcpy(tmp, g_ini_cache.data + min_t(loff_t, fp->f_pos, g_ini_cache.size), ret);
+    } else {
+        ret = kernel_read(fp, tmp, MAX_READ_LINE_NUM, &fp->f_pos);
+    }
 #else
     ret = kernel_read(fp, fp->f_pos, tmp, MAX_READ_LINE_NUM);
 #endif
@@ -125,26 +226,6 @@ static osal_s32 ini_file_close(ini_file *fp)
 #endif
     fp = NULL;
     return INI_SUCC;
-}
-
-static bool ini_file_exist(osal_char *file_path)
-{
-    ini_file *fp = NULL;
-
-    if (file_path == NULL) {
-        oal_print_err("para file_path is NULL\n");
-        return false;
-    }
-
-    fp = ini_file_open(file_path, "rt");
-    if (fp == NULL) {
-        oal_print_dbg("%s not exist\n", file_path);
-        return false;
-    }
-
-    ini_file_close(fp);
-
-    return true;
 }
 
 /* Note:symbol "fp" not accessed */
@@ -403,7 +484,7 @@ osal_s32 ini_find_var_value_by_path_etc(osal_char *path, osal_s32 tag_index, osa
 
     osal_s32 ret;
 
-    if (var == NULL || var[0] == '\0' || value == NULL) {
+    if (path == NULL || var == NULL || var[0] == '\0' || value == NULL || size == 0) {
         oal_print_err("check if var and value is NULL or blank");
         return INI_FAILED;
     }
@@ -417,12 +498,27 @@ osal_s32 ini_find_var_value_by_path_etc(osal_char *path, osal_s32 tag_index, osa
     fp = ini_file_open(path, "rt");
     if (fp == 0) {
         oal_print_err("open %s failed!!!", path);
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
+        ini_cache_clear();
+#endif
+#endif
         ini_mutex_unlock(&file_mutex_etc);
         return INI_FAILED;
     }
 
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
+    ini_cache_prepare(fp);
+#endif
+#endif
     /* find var in .ini return value */
     ret = ini_find_var(fp, tag_index, var, value, size);
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
+    g_ini_cache.reader = NULL;
+#endif
+#endif
     if (ret == INI_FAILED) {
         value[0] = '\0';
         ini_file_close(fp);
@@ -449,11 +545,6 @@ osal_s32 ini_find_var_value_by_path_etc(osal_char *path, osal_s32 tag_index, osa
 
 osal_s32 ini_find_var_value_etc(osal_s32 tag_index, osal_char *var, osal_char *value, osal_u32 size)
 {
-    if (ini_file_exist(INI_FILE_PATH) == 0) {
-        oal_print_err(" %s not exist!!!", INI_FILE_PATH);
-        return INI_FAILED;
-    }
-
     return ini_find_var_value_by_path_etc(INI_FILE_PATH, tag_index, var, value, size);
 }
 
@@ -604,14 +695,21 @@ int ini_cfg_init_etc(void)
         return INI_FAILED;
     }
     ini_init_mutex(&file_mutex_etc);
-    oal_print_warning("ini_file_name@%s\n", g_ini_file_name_etc);
+    oal_print_info("ini_file_name@%s\n", g_ini_file_name_etc);
     return INI_SUCC;
 }
 
 void ini_cfg_exit_etc(void)
 {
+#if defined(_PRE_OS_VERSION_LINUX) && defined(_PRE_OS_VERSION) && (_PRE_OS_VERSION_LINUX == _PRE_OS_VERSION)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
+    ini_mutex_lock(&file_mutex_etc);
+    ini_cache_clear();
+    ini_mutex_unlock(&file_mutex_etc);
+#endif
+#endif
     ini_destroy_mutex(&file_mutex_etc);
-    oal_print_warning("ini config search exit!\n");
+    oal_print_info("ini config search exit!\n");
 }
 
 /*

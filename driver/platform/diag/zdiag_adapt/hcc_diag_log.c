@@ -200,7 +200,7 @@ td_s32 hcc_diag_log_init(td_void)
         oal_print_err("hcc diag log service ini failed, ret %d\n", ret);
         return EXT_ERR_FAILURE;
     }
-    oal_print_err("hcc diag log service ini ok\n");
+    oal_print_info("hcc diag log service ini ok\n");
 
     return EXT_ERR_SUCCESS;
 }
